@@ -115,7 +115,7 @@
 |---------|----------|
 | `void utils_srand(unsigned int seed)` | Инициализация генератора. |
 | `double utils_rand(void)` | Равномерное распределение [0, 1). |
-| `double utils_gaussian_random(double mean, double stddev)` | Нормальное распределение (Box-Muller), обр��зка \|z\|>10. |
+| `double utils_gaussian_random(double mean, double stddev)` | Нормальное распределение (Box-Muller), обрезка \|z\|>10. |
 
 **Прочее:**
 
