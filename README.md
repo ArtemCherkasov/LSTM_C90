@@ -1,10 +1,10 @@
-# LSTM нейросеть на C90 для прогнозирования EUR/USD / LSTM neural network in C90 for EUR/USD forecasting
+# LSTM
 
 ---
 
-## 🇷🇺 Описание на русском языке
+## 🇷🇺
 
-Проект реализует LSTM (Long Short-Term Memory) нейронную сеть на стандарте C90 для прогнозирования финансовых временных рядов (валютная пара EUR/USD).
+Проект реализует LSTM (Long Short-Term Memory) нейронную сеть на стандарте C90 для прогнозирования финансовых временных рядов.
 
 ### Архитектура
 
@@ -236,9 +236,9 @@
 | 9 | **Нет sigmoid derivative для output gate** в BPTT | Добавлено `o*(1-o)` |
 
 
-## 🇬🇧 English description
+## 🇬🇧
 
-This project implements an LSTM (Long Short-Term Memory) neural network in C90 standard for forecasting financial time series (EUR/USD currency pair).
+This project implements an LSTM (Long Short-Term Memory) neural network in C90 standard for forecasting financial time series.
 
 ### Architecture
 
