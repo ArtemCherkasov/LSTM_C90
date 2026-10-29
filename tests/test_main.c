@@ -59,6 +59,9 @@ int main(void) {
     total++; passed += test_volume_clip_and_label_norm_ohlc();
     printf("\n");
 
+    total++; passed += test_deterministic_ohlc();
+    printf("\n");
+
     /* ===== Direction-specific tests ===== */
     printf("--- Direction tests ---\n\n");
     total++; passed += test_direction_labels();
@@ -68,6 +71,9 @@ int main(void) {
     printf("\n");
 
     total++; passed += test_sigmoid_gradient_check();
+    printf("\n");
+
+    total++; passed += test_deterministic_direction();
     printf("\n");
 
     printf("========================================\n");

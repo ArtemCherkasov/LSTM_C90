@@ -71,7 +71,7 @@
 | `--ohlcpredictcount` | 1 | Кол-во OHLC векторов (только для `--mode ohlc`) |
 | `--directioncount` | 1 | Кол-во шагов прогноза направления (только для `--mode direction`) |
 | `--data` | `../resources/EURUSD_*.csv` | Путь к CSV-файлу |
-| `--model` | `../resources/model_ohlc_predic_count_N.txt` | Путь к файлу модели |
+| `--model` | `../resources/model_{mode}_predic_count_N.txt` | Путь к файлу модели |
 
 **Зашиты в код** (в `lstm.h` / `main.c`):
 
@@ -140,11 +140,13 @@
 │   ├── test_model_io.c, test_deterministic.c, test_gradient.c
 │   ├── ohlc/
 │   │   ├── test_training_ohlc.c     # Training loop (OHLC labels)
-│   │   └── test_data_ohlc.c        # Volume clip & label norm
+│   │   ├── test_data_ohlc.c        # Volume clip & label norm
+│   │   └── test_deterministic_ohlc.c # Forward+BPTT vs scalar (linear)
 │   └── direction/
 │       ├── test_data_direction.c   # Labels 0/1
 │       ├── test_training_direction.c # Training loop (sigmoid)
-│       └── test_sigmoid_gradient.c  # Sigmoid gradient check
+│       ├── test_sigmoid_gradient.c  # Sigmoid gradient check
+│       └── test_deterministic_direction.c # Forward+BPTT vs scalar (sigmoid)
 ├── resources/
 │   ├── EURUSD_H1_*.csv
 │   └── model_{mode}_predic_count_N.txt
@@ -202,7 +204,7 @@ Output layer: `weight_output_layer` [num_outputs × n], `bias_output_layer` [num
 
 ### Тесты
 
-18 тестов, разбиты по файлам, все проходят:
+20 тестов, разбиты по файлам, все проходят:
 
 **Общие LSTM тесты (13):**
 
@@ -222,20 +224,22 @@ Output layer: `weight_output_layer` [num_outputs × n], `bias_output_layer` [num
 | 12 | `test_deterministic.c` | `test_deterministic_forward_128` | 128 cells × 256 steps: H, C совпадают с аналитикой |
 | 13 | `test_gradient.c` | `test_bptt_gradient_check_128` | 128 cells × 4 steps: 10 gradient checks |
 
-**OHLC тесты (2):**
+**OHLC тесты (3):**
 
 | # | Файл | Тест | Описание |
 |---|------|------|----------|
 | 14 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE уменьшается (OHLC labels, many-to-many) |
 | 15 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels в [-1,1] |
+| 16 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 шага, linear) |
 
-**Direction тесты (3):**
+**Direction тесты (4):**
 
 | # | Файл | Тест | Описание |
 |---|------|------|----------|
-| 16 | `direction/test_data_direction.c` | `test_direction_labels` | Все labels ровно 0 или 1 |
-| 17 | `direction/test_training_direction.c` | `test_training_loop_direction` | MSE уменьшается с sigmoid активацией |
-| 18 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks с sigmoid, max rel_err ~2e-7 |
+| 17 | `direction/test_data_direction.c` | `test_direction_labels` | Все labels ровно 0 или 1 |
+| 18 | `direction/test_training_direction.c` | `test_training_loop_direction` | MSE уменьшается с sigmoid активацией |
+| 19 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks с sigmoid, max rel_err ~2e-7 |
+| 20 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 шага, sigmoid) |
 
 
 ## 🇬🇧
@@ -307,7 +311,7 @@ Denormalization: `price = ref_close × (1 + denorm(pred))`
 | `--ohlcpredictcount` | 1 | Number of OHLC vectors (only for `--mode ohlc`) |
 | `--directioncount` | 1 | Number of direction steps (only for `--mode direction`) |
 | `--data` | `../resources/EURUSD_*.csv` | Path to CSV file |
-| `--model` | `../resources/model_ohlc_predic_count_N.txt` | Path to model file |
+| `--model` | `../resources/model_{mode}_predic_count_N.txt` | Path to model file |
 
 **Hardcoded** (in `lstm.h` / `main.c`):
 
@@ -368,9 +372,11 @@ Output OHLC for M bars starting at row N.
 │   ├── test_model_io.c, test_deterministic.c, test_gradient.c
 │   ├── ohlc/
 │   │   ├── test_training_ohlc.c, test_data_ohlc.c
+│   │   └── test_deterministic_ohlc.c
 │   └── direction/
 │       ├── test_data_direction.c, test_training_direction.c
-│       └── test_sigmoid_gradient.c
+│       ├── test_sigmoid_gradient.c
+│       └── test_deterministic_direction.c
 ├── resources/
 │   ├── EURUSD_H1_*.csv
 │   └── model_{mode}_predic_count_N.txt
@@ -380,7 +386,7 @@ Output OHLC for M bars starting at row N.
 
 ### Tests
 
-18 tests, split across files, all passing:
+20 tests, split across files, all passing:
 
 **Common LSTM tests (13):**
 
@@ -400,17 +406,19 @@ Output OHLC for M bars starting at row N.
 | 12 | `test_deterministic.c` | `test_deterministic_forward_128` | 128 cells × 256 steps: H, C match analytical |
 | 13 | `test_gradient.c` | `test_bptt_gradient_check_128` | 128 cells × 4 steps: 10 gradient checks |
 
-**OHLC tests (2):**
+**OHLC tests (3):**
 
 | # | File | Test | Description |
 |---|------|------|-------------|
 | 14 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE decreases (OHLC labels, many-to-many) |
 | 15 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels in [-1,1] |
+| 16 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 steps, linear) |
 
-**Direction tests (3):**
+**Direction tests (4):**
 
 | # | File | Test | Description |
 |---|------|------|-------------|
-| 16 | `direction/test_data_direction.c` | `test_direction_labels` | All labels are exactly 0 or 1 |
-| 17 | `direction/test_training_direction.c` | `test_training_loop_direction` | MSE decreases with sigmoid activation |
-| 18 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks with sigmoid, max rel_err ~2e-7 |
+| 17 | `direction/test_data_direction.c` | `test_direction_labels` | All labels are exactly 0 or 1 |
+| 18 | `direction/test_training_direction.c` | `test_training_loop_direction` | MSE decreases with sigmoid activation |
+| 19 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks with sigmoid, max rel_err ~2e-7 |
+| 20 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 steps, sigmoid) |

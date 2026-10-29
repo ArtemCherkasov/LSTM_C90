@@ -577,13 +577,16 @@ double lstm_compute_accuracy(LSTMNetwork *net, Dataset *ds) {
 
     preds = (double *)utils_safe_calloc((size_t)(net->num_outputs * ds->sequence_length), sizeof(double));
 
-    for (i = 0; i < ds->num_samples; i++) {
-        lstm_forward(net, ds->features[i], cell_states, ds->sequence_length, preds);
-        for (t = 0; t < ds->sequence_length; t++) {
-            for (o = 0; o < net->num_outputs; o++) {
-                int predicted = (preds[t * net->num_outputs + o] > 0.0) ? 1 : 0;
-                int actual = (ds->labels[i][t * net->num_outputs + o] > 0.0) ? 1 : 0;
-                if (predicted == actual) correct++;
+    {
+        double threshold = (net->output_activation == ACTIVATION_SIGMOID) ? 0.5 : 0.0;
+        for (i = 0; i < ds->num_samples; i++) {
+            lstm_forward(net, ds->features[i], cell_states, ds->sequence_length, preds);
+            for (t = 0; t < ds->sequence_length; t++) {
+                for (o = 0; o < net->num_outputs; o++) {
+                    int predicted = (preds[t * net->num_outputs + o] > threshold) ? 1 : 0;
+                    int actual = (ds->labels[i][t * net->num_outputs + o] > 0.0) ? 1 : 0;
+                    if (predicted == actual) correct++;
+                }
             }
         }
     }

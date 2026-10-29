@@ -41,9 +41,11 @@ set(TEST_SOURCES
     tests/test_gradient.c
     tests/ohlc/test_training_ohlc.c
     tests/ohlc/test_data_ohlc.c
+    tests/ohlc/test_deterministic_ohlc.c
     tests/direction/test_data_direction.c
     tests/direction/test_training_direction.c
     tests/direction/test_sigmoid_gradient.c
+    tests/direction/test_deterministic_direction.c
     src/utils.c
     src/data.c
     src/lstm.c

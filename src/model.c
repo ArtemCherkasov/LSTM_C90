@@ -44,7 +44,10 @@ int model_save(const char *filepath, LSTMNetwork *net,
     fprintf(f, "# num_cells: %d\n", n);
     fprintf(f, "# num_features: %d\n", f_);
     fprintf(f, "# num_outputs: %d\n", num_out);
-    fprintf(f, "# ohlc_predict_count: %d\n", num_out / OUTPUTS_PER_CANDLE);
+    if (norm_params && norm_params->mode == MODE_DIRECTION)
+        fprintf(f, "# predict_count: %d\n", num_out);
+    else
+        fprintf(f, "# predict_count: %d\n", num_out / OUTPUTS_PER_CANDLE);
     fprintf(f, "# mode: %s\n", (norm_params && norm_params->mode == MODE_DIRECTION) ? "direction" : "ohlc");
     fprintf(f, "# epochs_trained: %.0f\n", epochs_trained);
     fprintf(f, "# best_train_mse: %.6f\n", best_train_loss);

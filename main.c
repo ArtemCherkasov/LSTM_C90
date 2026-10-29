@@ -186,8 +186,8 @@ int main(int argc, char *argv[]) {
 
     /* Compute derived values based on mode */
     if (mode == MODE_OHLC) {
-        predict_count = predict_count;
-        num_outputs = predict_count * OUTPUTS_PER_CANDLE;
+        predict_count = ohlc_predict_count;
+        num_outputs = ohlc_predict_count * OUTPUTS_PER_CANDLE;
     } else {
         predict_count = direction_predict_count;
         num_outputs = direction_predict_count;
@@ -274,7 +274,7 @@ int main(int argc, char *argv[]) {
                 fclose(mf);
             }
             if (model_ohlc_count != predict_count) {
-                fprintf(stderr, "Error: --ohlcpredictcount %d does not match model's predict_count %d\n",
+                fprintf(stderr, "Error: predict_count %d does not match model's predict_count %d\n",
                         predict_count, model_ohlc_count);
                 utils_safe_free(raw_data);
                 return 1;

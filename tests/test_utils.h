@@ -58,10 +58,12 @@ int test_bptt_gradient_check_128(void);
 /* OHLC-specific */
 int test_training_loop_ohlc(void);
 int test_volume_clip_and_label_norm_ohlc(void);
+int test_deterministic_ohlc(void);
 
 /* Direction-specific */
 int test_direction_labels(void);
 int test_training_loop_direction(void);
 int test_sigmoid_gradient_check(void);
+int test_deterministic_direction(void);
 
 #endif /* TEST_UTILS_H */
