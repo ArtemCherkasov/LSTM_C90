@@ -27,7 +27,7 @@ int model_save(const char *filepath, LSTMNetwork *net,
                double epochs_trained, double best_train_loss,
                double best_test_accuracy, Dataset *norm_params) {
     FILE *f;
-    int n, f_, combined, i, j;
+    int n, f_, combined, num_out, i, j;
 
     f = fopen(filepath, "w");
     if (!f) {
@@ -37,11 +37,15 @@ int model_save(const char *filepath, LSTMNetwork *net,
 
     n = net->num_cells;
     f_ = net->num_features;
+    num_out = net->num_outputs;
     combined = n + f_;
 
     fprintf(f, "# LSTM Model - Text Format\n");
     fprintf(f, "# num_cells: %d\n", n);
     fprintf(f, "# num_features: %d\n", f_);
+    fprintf(f, "# num_outputs: %d\n", num_out);
+    fprintf(f, "# ohlc_predict_count: %d\n", num_out / OUTPUTS_PER_CANDLE);
+    fprintf(f, "# mode: %s\n", (norm_params && norm_params->mode == MODE_DIRECTION) ? "direction" : "ohlc");
     fprintf(f, "# epochs_trained: %.0f\n", epochs_trained);
     fprintf(f, "# best_train_mse: %.6f\n", best_train_loss);
     fprintf(f, "# best_test_direction_accuracy: %.4f\n\n", best_test_accuracy);
@@ -54,7 +58,16 @@ int model_save(const char *filepath, LSTMNetwork *net,
                     norm_params->feat_min[i],
                     norm_params->feat_max[i]);
         }
+        fprintf(f, "label_min:");
+        for (i = 0; i < norm_params->num_outputs; i++) {
+            fprintf(f, " %.8f", norm_params->label_min[i]);
+        }
         fprintf(f, "\n");
+        fprintf(f, "label_max:");
+        for (i = 0; i < norm_params->num_outputs; i++) {
+            fprintf(f, " %.8f", norm_params->label_max[i]);
+        }
+        fprintf(f, "\n\n");
     }
 
     fprintf(f, "[lstm_weights]\n");
@@ -92,10 +105,18 @@ int model_save(const char *filepath, LSTMNetwork *net,
 
     fprintf(f, "[output_weights]\n");
     fprintf(f, "weight_output_layer:\n");
-    for (i = 0; i < n; i++) {
-        fprintf(f, "  w[%d]: %.6f\n", i, net->weight_output_layer->data[i]);
+    for (i = 0; i < num_out; i++) {
+        fprintf(f, "  row[%d]:", i);
+        for (j = 0; j < n; j++) {
+            fprintf(f, " %.6f", net->weight_output_layer->data[i * n + j]);
+        }
+        fprintf(f, "\n");
     }
-    fprintf(f, "bias_output_layer: %.6f\n", net->bias_output_layer);
+    fprintf(f, "bias_output_layer:");
+    for (i = 0; i < num_out; i++) {
+        fprintf(f, " %.6f", net->bias_output_layer[i]);
+    }
+    fprintf(f, "\n");
 
     fclose(f);
     return 0;
@@ -106,7 +127,7 @@ int model_save(const char *filepath, LSTMNetwork *net,
 int model_load(const char *filepath, LSTMNetwork *net) {
     FILE *f;
     char line[8192];
-    int n, f_, combined;
+    int n, f_, combined, num_out;
     int section;
     int gate;
     int matrix_type;
@@ -121,6 +142,7 @@ int model_load(const char *filepath, LSTMNetwork *net) {
 
     n = net->num_cells;
     f_ = net->num_features;
+    num_out = net->num_outputs;
     combined = n + f_;
 
     f = fopen(filepath, "r");
@@ -154,7 +176,6 @@ int model_load(const char *filepath, LSTMNetwork *net) {
 
         /* Parse LSTM weights */
         if (section == SECTION_LSTM_WEIGHTS) {
-            /* Gate name lines - debug: print when gate is set */
             if (strncmp(line, "forget_recurrent:", strlen("forget_recurrent:")) == 0) { 
                 gate = GATE_FORGET; 
                 matrix_type = MATRIX_TYPE_RECURRENT;
@@ -286,21 +307,28 @@ int model_load(const char *filepath, LSTMNetwork *net) {
         /* Parse output weights */
         if (section == SECTION_OUTPUT_WEIGHTS) {
             if (strncmp(line, "weight_output_layer:", strlen("weight_output_layer:")) == 0) continue;
-            if (strncmp(line, "w[", strlen("w[")) == 0) {
-                char *p = strchr(line, ':');
-                if (p && sscanf(line, "w[%d]:", &idx) == 1) {
-                    p++;
-                    while (*p == ' ') p++;
-                    net->weight_output_layer->data[idx] = strtod(p, NULL);
+            /* Row lines for output layer: "row[o]: w0 w1 ... wn" */
+            if (strncmp(line, "row[", strlen("row[")) == 0) {
+                if (sscanf(line, "row[%d]:", &parsed_row) == 1) {
+                    char *p = strchr(line, ':');
+                    if (p) {
+                        p++;
+                        while (*p == ' ') p++;
+                        for (i = 0; i < n && *p; i++) {
+                            val = strtod(p, &p);
+                            net->weight_output_layer->data[parsed_row * n + i] = val;
+                        }
+                    }
                 }
+                continue;
             }
             if (strncmp(line, "bias_output_layer:", strlen("bias_output_layer:")) == 0) {
-                char *p = strchr(line, ':');
-                if (p) {
-                    p++;
-                    while (*p == ' ') p++;
-                    net->bias_output_layer = strtod(p, NULL);
+                char *p = line + strlen("bias_output_layer:");
+                while (*p == ' ') p++;
+                for (i = 0; i < num_out && *p; i++) {
+                    net->bias_output_layer[i] = strtod(p, &p);
                 }
+                continue;
             }
         }
     }

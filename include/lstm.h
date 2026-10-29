@@ -7,11 +7,17 @@
 
 /* ==================== Constants ==================== */
 #define PREDICTION_THRESHOLD 0.5
+#define OUTPUTS_PER_CANDLE 4          /* OHLC */
+#define DEFAULT_OHLC_PREDICT_COUNT 1
+#define ACTIVATION_LINEAR 0
+#define ACTIVATION_SIGMOID 1
 
 /* ==================== LSTM Network ==================== */
 typedef struct {
     int num_cells;
     int num_features;
+    int num_outputs;
+    int output_activation;  /* 0=linear, 1=sigmoid */
 
     /* Weight matrices for each gate: [num_cells x num_cells] (recurrent)
      *                      and [num_cells x num_features] (input) */
@@ -27,9 +33,9 @@ typedef struct {
     Matrix *weight_candidate_recurrent, *weight_candidate_input;
     double *bias_candidate;
 
-    /* Output layer: [1 x num_cells] and [1] */
+    /* Output layer: [num_outputs x num_cells] and [num_outputs] */
     Matrix *weight_output_layer;
-    double bias_output_layer;
+    double *bias_output_layer;
 
     /* Gradients */
     Matrix *dweight_forget_recurrent, *dweight_forget_input;
@@ -45,7 +51,7 @@ typedef struct {
     double *dbias_candidate;
 
     Matrix *dweight_output_layer;
-    double dbias_output_layer;
+    double *dbias_output_layer;
 
     /* Momentum terms */
     Matrix *mweight_forget_recurrent, *mweight_forget_input;
@@ -57,27 +63,30 @@ typedef struct {
     Matrix *mweight_candidate_recurrent, *mweight_candidate_input;
     double *mbias_candidate;
     Matrix *mweight_output_layer;
-    double mbias_output_layer;
+    double *mbias_output_layer;
 } LSTMNetwork;
 
 /* ==================== Functions ==================== */
 
 /* Initialize network with Xavier/Glorot initialization */
-LSTMNetwork *lstm_init(int num_cells, int num_features, unsigned int seed);
+LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigned int seed);
 
 /* Free network */
 void lstm_free(LSTMNetwork *net);
 
-/* Forward pass through a single sequence */
-/* Returns prediction probability [0, 1] */
-/* Fills cell_states array (size = sequence_length) with intermediate values */
-double lstm_forward(LSTMNetwork *net, const double *sequence,
-                    LSTMCellState *cell_states, int seq_len);
+/* Forward pass (many-to-many): computes outputs at EVERY timestep */
+/* outputs array size = seq_len * net->num_outputs (layout: [t * num_outputs + o]) */
+/* cell_states array size = seq_len */
+void lstm_forward(LSTMNetwork *net, const double *sequence,
+                  LSTMCellState *cell_states, int seq_len,
+                  double *outputs);
 
-/* Backward pass (BPTT) - computes gradients */
+/* Backward pass (BPTT) - computes gradients (many-to-many) */
+/* predictions and targets: size = seq_len * net->num_outputs */
 void lstm_backward(LSTMNetwork *net, const double *sequence,
                    const LSTMCellState *cell_states,
-                   double prediction, double target, int seq_len);
+                   const double *predictions, const double *targets,
+                   int seq_len);
 
 /* Update weights with SGD + momentum (gradients divided by batch_size) */
 void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size);
@@ -86,7 +95,9 @@ void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size);
 double lstm_compute_loss(LSTMNetwork *net, Dataset *ds);
 double lstm_compute_accuracy(LSTMNetwork *net, Dataset *ds);
 
-/* Predict probability for a single sequence */
-double lstm_predict(LSTMNetwork *net, const double *sequence, int seq_len);
+/* Predict: fills outputs array (size = seq_len * net->num_outputs) */
+/* Caller uses last timestep: outputs[(seq_len-1)*num_outputs + o] */
+void lstm_predict(LSTMNetwork *net, const double *sequence, int seq_len,
+                  double *outputs);
 
 #endif /* LSTM_H */

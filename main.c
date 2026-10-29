@@ -4,8 +4,12 @@
 #include <signal.h>
 #include "include/utils.h"
 #include "include/data.h"
+#include "include/ohlc/data_ohlc.h"
+#include "include/direction/data_direction.h"
 #include "include/lstm.h"
 #include "include/model.h"
+#include "include/ohlc/predict_ohlc.h"
+#include "include/direction/predict_direction.h"
 #include "include/types.h"
 
 /* ==================== Global for signal handler ==================== */
@@ -45,7 +49,7 @@ static void shuffle_indices(int *indices, int count, unsigned int seed) {
 /* ==================== Constants ==================== */
 #define DEFAULT_NUM_LSTM_CELLS 128
 #define DEFAULT_NUM_EPOCHS 100
-#define DEFAULT_LEARNING_RATE 0.0005
+#define DEFAULT_LEARNING_RATE 0.005
 #define DEFAULT_SEQUENCE_LENGTH 64
 #define DEFAULT_BATCH_SIZE 32
 #define DEFAULT_MOMENTUM 0.9
@@ -85,21 +89,24 @@ int main(int argc, char *argv[]) {
     double test_acc;
     int demo_start;
     int d;
-    double pred_demo;
-    int actual;
-    int predicted;
-    const char *actual_str;
-    const char *pred_str;
-    double pred;
-    int predict_mode = 0;
     int raw_line = 0;
-    int predict_count = 0;
     int real_mode = 0;
     int real_count = 0;
     double batch_loss_sum;
     double batch_loss_avg;
     int bar_width;
     int progress;
+    double *preds;
+    int o;
+    int kk;
+    int ohlc_predict_count;
+    int direction_predict_count;
+    int predict_count;
+    int num_outputs;
+    char model_path_buf[256];
+    int model_path_overridden;
+    const char *mode_str;
+    int mode;
 
     /* Parse CLI arguments */
     num_lstm_cells = DEFAULT_NUM_LSTM_CELLS;
@@ -109,13 +116,16 @@ int main(int argc, char *argv[]) {
     batch_size = DEFAULT_BATCH_SIZE;
     momentum = DEFAULT_MOMENTUM;
     seed = DEFAULT_SEED;
-    predict_mode = 0;
     raw_line = 0;
-    predict_count = 0;
     real_mode = 0;
     real_count = 0;
     data_path = "../resources/EURUSD_H1_200906120000_202509251100.csv";
-    model_path = "../resources/model.txt";
+    model_path = NULL;
+    predict_count = DEFAULT_OHLC_PREDICT_COUNT;
+    direction_predict_count = DEFAULT_OHLC_PREDICT_COUNT;
+    model_path_overridden = 0;
+    mode_str = "ohlc";
+    mode = MODE_OHLC;
 
     /* Allow overriding data_path and model_path via CLI */
     for (i = 1; i < argc; i++) {
@@ -124,6 +134,7 @@ int main(int argc, char *argv[]) {
             i++;
         } else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
             model_path = argv[i + 1];
+            model_path_overridden = 1;
             i++;
         }
     }
@@ -135,10 +146,6 @@ int main(int argc, char *argv[]) {
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--line") == 0 && i + 1 < argc) {
             raw_line = atoi(argv[i + 1]);
-            i++;
-        } else if (strcmp(argv[i], "--predict") == 0 && i + 1 < argc) {
-            predict_mode = 1;
-            predict_count = atoi(argv[i + 1]);
             i++;
         } else if (strcmp(argv[i], "--real") == 0 && i + 1 < argc) {
             real_mode = 1;
@@ -156,13 +163,41 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--seq") == 0 && i + 1 < argc) {
             sequence_length = atoi(argv[i + 1]);
             i++;
+        } else if (strcmp(argv[i], "--ohlcpredictcount") == 0 && i + 1 < argc) {
+            ohlc_predict_count = atoi(argv[i + 1]);
+            i++;
+        } else if (strcmp(argv[i], "--directioncount") == 0 && i + 1 < argc) {
+            direction_predict_count = atoi(argv[i + 1]);
+            i++;
+        } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+            mode_str = argv[i + 1];
+            if (strcmp(mode_str, "direction") == 0) mode = MODE_DIRECTION;
+            else mode = MODE_OHLC;
+            i++;
         } else if (strcmp(argv[i], "--data") == 0 && i + 1 < argc) {
             data_path = argv[i + 1];
             i++;
         } else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
             model_path = argv[i + 1];
+            model_path_overridden = 1;
             i++;
         }
+    }
+
+    /* Compute derived values based on mode */
+    if (mode == MODE_OHLC) {
+        predict_count = predict_count;
+        num_outputs = predict_count * OUTPUTS_PER_CANDLE;
+    } else {
+        predict_count = direction_predict_count;
+        num_outputs = direction_predict_count;
+    }
+
+    /* Build default model path if not overridden */
+    if (!model_path_overridden) {
+        snprintf(model_path_buf, sizeof(model_path_buf),
+                 "../resources/model_%s_predic_count_%d.txt", mode_str, predict_count);
+        model_path = model_path_buf;
     }
 
     /* ==================== REAL DATA MODE ==================== */
@@ -192,16 +227,21 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /* ==================== PREDICT MODE ==================== */
-    if (predict_mode && raw_line > 0 && predict_count > 0) {
-        int seq_len, num_features, num_available, start_row, end_row;
-        int f, fi, s, ref_steps, p, norm_count;
+    /* ==================== PREDICT MODE (--line without --real) ==================== */
+    if (raw_line > 0 && !real_mode) {
+        int seq_len, num_features, start_row, end_row;
+        int fi, s, ref_steps, norm_count;
         double cr, rng_val, cret, vol_ret, ma_diff, vol;
-        double feat_min[6], feat_max[6], mmin, mmax;
-        double **features;
         double *seq_buf;
+        double *pred_outputs;
+        double *feat_min_arr;
+        double *feat_max_arr;
+        double *lbl_min_arr;
+        double *lbl_max_arr;
+        double **features;
         LSTMNetwork *pred_network;
-        char mline[512], mname[64];
+        char mline[8192];
+        double ref_close;
 
         seq_len = sequence_length;
         num_features = 6;
@@ -218,8 +258,57 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        /* Validate predict_count against model file */
+        {
+            FILE *mf = fopen(model_path, "r");
+            int model_ohlc_count = -1;
+            char vline[512];
+            if (mf) {
+                while (fgets(vline, sizeof(vline), mf)) {
+                    utils_trim(vline);
+                    if (strncmp(vline, "# predict_count:", strlen("# predict_count:")) == 0) {
+                        model_ohlc_count = atoi(vline + strlen("# predict_count:"));
+                        break;
+                    }
+                }
+                fclose(mf);
+            }
+            if (model_ohlc_count != predict_count) {
+                fprintf(stderr, "Error: --ohlcpredictcount %d does not match model's predict_count %d\n",
+                        predict_count, model_ohlc_count);
+                utils_safe_free(raw_data);
+                return 1;
+            }
+        }
+
+        /* Validate mode against model file */
+        {
+            FILE *mf = fopen(model_path, "r");
+            char model_mode_str[32] = "";
+            char vline2[512];
+            if (mf) {
+                while (fgets(vline2, sizeof(vline2), mf)) {
+                    utils_trim(vline2);
+                    if (strncmp(vline2, "# mode:", 7) == 0) {
+                        char *p = vline2 + 7;
+                        while (*p == ' ') p++;
+                        strncpy(model_mode_str, p, sizeof(model_mode_str) - 1);
+                        model_mode_str[sizeof(model_mode_str) - 1] = 0;
+                        break;
+                    }
+                }
+                fclose(mf);
+            }
+            if (model_mode_str[0] != 0 && strcmp(model_mode_str, mode_str) != 0) {
+                fprintf(stderr, "Error: --mode %s does not match model's mode %s\n", mode_str, model_mode_str);
+                utils_safe_free(raw_data);
+                return 1;
+            }
+        }
+
         /* Load model */
-        pred_network = lstm_init(num_lstm_cells, num_features, seed);
+        pred_network = lstm_init(num_lstm_cells, num_features, num_outputs, seed);
+        if (mode == MODE_DIRECTION) pred_network->output_activation = ACTIVATION_SIGMOID;
         if (model_load(model_path, pred_network) != 0) {
             fprintf(stderr, "Failed to load model from %s\n", model_path);
             utils_safe_free(raw_data);
@@ -227,82 +316,81 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        /* Allocate normalization arrays */
+        feat_min_arr = (double *)utils_safe_calloc((size_t)num_features, sizeof(double));
+        feat_max_arr = (double *)utils_safe_calloc((size_t)num_features, sizeof(double));
+        lbl_min_arr = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
+        lbl_max_arr = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
+
         /* Load normalization params from model file */
         {
             FILE *mf = fopen(model_path, "r");
             if (mf) {
-                while (fgets(mline, sizeof(mline), mf) && norm_count < 6) {
+                while (fgets(mline, sizeof(mline), mf)) {
                     utils_trim(mline);
+                    if (strncmp(mline, "[lstm_weights]", strlen("[lstm_weights]")) == 0) break;
                     if (strncmp(mline, "feature_name:", strlen("feature_name:")) == 0) {
-                        /* Parse: feature_name: name | min: value | max: value */
-                        char *p = mline;
-                        char *min_pos = strstr(p, "min:");
-                        char *max_pos = strstr(p, "max:");
-                        if (min_pos && max_pos) {
-                            mmin = strtod(min_pos + 4, NULL);
-                            mmax = strtod(max_pos + 4, NULL);
-                            feat_min[norm_count] = mmin;
-                            feat_max[norm_count] = mmax;
+                        char *min_pos = strstr(mline, "min:");
+                        char *max_pos = strstr(mline, "max:");
+                        if (min_pos && max_pos && norm_count < num_features) {
+                            feat_min_arr[norm_count] = strtod(min_pos + 4, NULL);
+                            feat_max_arr[norm_count] = strtod(max_pos + 4, NULL);
                             norm_count++;
-                            printf("NORM[%d]: min=%.8f max=%.8f\n", norm_count - 1, mmin, mmax);
+                        }
+                    } else if (strncmp(mline, "label_min:", strlen("label_min:")) == 0) {
+                        char *p = mline + strlen("label_min:");
+                        for (o = 0; o < num_outputs && *p; o++) {
+                            lbl_min_arr[o] = strtod(p, &p);
+                        }
+                    } else if (strncmp(mline, "label_max:", strlen("label_max:")) == 0) {
+                        char *p = mline + strlen("label_max:");
+                        for (o = 0; o < num_outputs && *p; o++) {
+                            lbl_max_arr[o] = strtod(p, &p);
                         }
                     }
                 }
                 fclose(mf);
             }
-        } /* end normalization params block */
+        }
 
         end_row = raw_line;
         if (end_row > num_raw - 1) end_row = num_raw - 1;
 
-        /* Compute features up to end_row + predict_count - 1 for all prediction windows */
-        {
-            int predict_end_row = end_row + predict_count - 1;
-            if (predict_end_row >= num_raw) predict_end_row = num_raw - 1;
-            num_available = predict_end_row - start_row + 1;
-        } /* end predict_end_row block */
-        /* num_available is now set */
-
-        if (num_available < seq_len) {
+        if (end_row < seq_len) {
             fprintf(stderr, "Error: Need at least %d rows for sequence, have %d\n",
-                    seq_len, num_available);
+                    seq_len, end_row);
             utils_safe_free(raw_data);
             lstm_free(pred_network);
-            return 1;
-        }
-        if (predict_count > num_raw - end_row) {
-            fprintf(stderr, "Error: Can predict at most %d steps ahead (line %d, data has %d rows)\n",
-                    num_raw - end_row, end_row, num_raw);
-            utils_safe_free(raw_data);
-            lstm_free(pred_network);
+            utils_safe_free(feat_min_arr);
+            utils_safe_free(feat_max_arr);
+            utils_safe_free(lbl_min_arr);
+            utils_safe_free(lbl_max_arr);
             return 1;
         }
 
-        /* Allocate feature matrix dynamically */
-        features = (double **)utils_safe_calloc((size_t)num_available, sizeof(double *));
-        for (f = 0; f < num_available; f++) {
-            features[f] = (double *)utils_safe_calloc((size_t)10, sizeof(double));
+        /* Allocate feature and sequence buffers */
+        features = (double **)utils_safe_calloc((size_t)seq_len, sizeof(double *));
+        for (s = 0; s < seq_len; s++) {
+            features[s] = (double *)utils_safe_calloc((size_t)num_features, sizeof(double));
         }
+        seq_buf = (double *)utils_safe_calloc((size_t)(seq_len * num_features), sizeof(double));
+        pred_outputs = (double *)utils_safe_calloc((size_t)(num_outputs * seq_len), sizeof(double));
 
-        /* Allocate sequence buffer for max reference steps */
-        seq_buf = (double *)utils_safe_calloc((size_t)(ref_steps * num_features), sizeof(double));
-
-        /* Compute and normalize features */
+        /* Compute and normalize features for the last seq_len candles before end_row */
         {
-            int predict_end_row = end_row + predict_count - 1;
             int pi;
-            if (predict_end_row >= num_raw) predict_end_row = num_raw - 1;
-            for (pi = start_row; pi <= predict_end_row; pi++) {
-                int f = pi - start_row;
+            for (s = 0; s < seq_len; s++) {
+                pi = end_row - seq_len + 1 + s;
                 cr = (raw_data[pi].close - raw_data[pi].open) / raw_data[pi].open;
                 rng_val = (raw_data[pi].high - raw_data[pi].low) / raw_data[pi].open;
-                cret = (pi > start_row) ? (raw_data[pi].close - raw_data[pi-1].close) / raw_data[pi-1].close : 0.0;
-                vol_ret = (pi > start_row && raw_data[pi-1].tickvol > 0) ?
+                cret = (pi > 0) ? (raw_data[pi].close - raw_data[pi-1].close) / raw_data[pi-1].close : 0.0;
+                vol_ret = (pi > 0 && raw_data[pi-1].tickvol > 0) ?
                     (raw_data[pi].tickvol - raw_data[pi-1].tickvol) / (double)raw_data[pi-1].tickvol : 0.0;
+                if (vol_ret > 10.0) vol_ret = 10.0;
+                if (vol_ret < -10.0) vol_ret = -10.0;
                 ma_diff = 0.0;
                 if (pi >= 20) {
                     double sum_short = 0.0, sum_long = 0.0;
-                    int kk;
                     for (kk = 0; kk < 5; kk++) sum_short += raw_data[pi - kk].close;
                     for (kk = 0; kk < 20; kk++) sum_long += raw_data[pi - kk].close;
                     sum_short /= 5.0;
@@ -312,9 +400,8 @@ int main(int argc, char *argv[]) {
                 vol = 0.0;
                 if (pi >= 12) {
                     double sum_ret = 0.0;
-                    int ret_count;
+                    int ret_count = 0;
                     int mm;
-                    ret_count = 0;
                     for (mm = pi - 12; mm < pi; mm++) {
                         if (mm > 0) {
                             sum_ret += (raw_data[mm].close - raw_data[mm-1].close) / raw_data[mm-1].close;
@@ -333,239 +420,64 @@ int main(int argc, char *argv[]) {
                         vol = sqrt(sum_sq / (double)ret_count);
                     }
                 }
-                features[f][0] = cr;
-                features[f][1] = rng_val;
-                features[f][2] = cret;
-                features[f][3] = vol_ret;
-                features[f][4] = ma_diff;
-                features[f][5] = vol;
+                features[s][0] = cr;
+                features[s][1] = rng_val;
+                features[s][2] = cret;
+                features[s][3] = vol_ret;
+                features[s][4] = ma_diff;
+                features[s][5] = vol;
 
+                /* Normalize features */
                 for (fi = 0; fi < num_features; fi++) {
-                    double r = feat_max[fi] - feat_min[fi];
+                    double r = feat_max_arr[fi] - feat_min_arr[fi];
                     if (r < 1e-15) r = 1.0;
-                    features[f][fi] = (features[f][fi] - feat_min[fi]) / r;
+                    features[s][fi] = (features[s][fi] - feat_min_arr[fi]) / r;
                 }
             }
         }
 
-        /* Predict */
-        /* Full output: 64 reference (real) + 16 prediction (autoregressive) */
+        /* Build flat sequence buffer */
+        for (s = 0; s < seq_len; s++) {
+            for (fi = 0; fi < num_features; fi++) {
+                seq_buf[s * num_features + fi] = features[s][fi];
+            }
+        }
+
+        /* Single forward pass — no autoregression */
+        lstm_predict(pred_network, seq_buf, seq_len, pred_outputs);
+
+        /* Reference close for denormalization */
+        ref_close = raw_data[end_row].close;
+
+        /* Output reference candles */
+        printf("\n  === Full Output: %d reference + %d prediction ===\n", ref_steps, predict_count);
         {
-            double prev_predicted_close;
-            int first_pred;
-            double **extended_features;
-            int extended_count;
-            int pred_steps = predict_count;
-            int p, s, fi, f;
-            double predicted_close_return;
-            double predicted_close;
-            double predicted_high;
-            double predicted_low;
-            double predicted_open;
-            double range;
-            double norm_range;
-            double raw_pred;
-            double last_cr, last_crng, last_cret, last_vol_ret, last_ma_diff, last_vol;
-            int feat_idx;
-
-            prev_predicted_close = raw_data[end_row].close;
-            first_pred = 1;
-
-            /* Allocate extended feature matrix for autoregressive prediction */
-            extended_count = num_available + pred_steps + 1;
-            extended_features = (double **)utils_safe_calloc((size_t)extended_count, sizeof(double *));
-            for (f = 0; f < extended_count; f++) {
-                extended_features[f] = (double *)utils_safe_calloc((size_t)num_features, sizeof(double));
-            }
-
-            /* Copy real features to extended buffer */
-            for (f = 0; f < num_available; f++) {
-                for (fi = 0; fi < num_features; fi++) {
-                    extended_features[f][fi] = features[f][fi];
-                }
-            }
-
-            printf("\n  === Full Output: %d reference + %d prediction ===\n", ref_steps, pred_steps);
-
-            /* Stage 1: Output reference (real data) steps */
-            for (p = 0; p < ref_steps; p++) {
-                int current_row = end_row - ref_steps + 1 + p;
-                int data_row = current_row;
-                if (current_row < 0 || current_row >= num_available) continue;
-                if (data_row < 0 || data_row >= num_raw) continue;
-
+            int ref_start = end_row - ref_steps + 1;
+            if (ref_start < 0) ref_start = 0;
+            for (kk = ref_start; kk <= end_row; kk++) {
+                if (kk < 0 || kk >= num_raw) continue;
                 printf("REF [%03d] %.5f %.5f %.5f %.5f\n",
-                       p + 1, raw_data[data_row].open, raw_data[data_row].high,
-                       raw_data[data_row].low, raw_data[data_row].close);
+                       kk - ref_start + 1, raw_data[kk].open, raw_data[kk].high,
+                       raw_data[kk].low, raw_data[kk].close);
             }
+        }
 
-            /* Stage 2: Autoregressive prediction steps */
-            for (p = 0; p < pred_steps; p++) {
-                int current_row;
-                int data_row;
-
-                /* Use last ref_steps features (including predicted) */
-                current_row = num_available - 1 + p;
-                data_row = end_row + p;
-
-                if (current_row < ref_steps - 1) continue;
-
-                /* Build sequence: last ref_steps features */
-                for (s = 0; s < ref_steps; s++) {
-                    for (fi = 0; fi < num_features; fi++) {
-                        seq_buf[s * num_features + fi] =
-                            extended_features[current_row - ref_steps + 1 + s][fi];
-                    }
-                }
-
-                pred = lstm_predict(pred_network, seq_buf, ref_steps);
-
-                /* Denormalize close_return (feature index 2) */
-                norm_range = feat_max[2] - feat_min[2];
-                if (norm_range < 1e-15) norm_range = 1.0;
-                raw_pred = pred;
-                predicted_close_return = raw_pred * norm_range + feat_min[2];
-
-                /* Clip return to realistic range (±2%) to prevent runaway predictions */
-                if (predicted_close_return > 0.02) predicted_close_return = 0.02;
-                if (predicted_close_return < -0.02) predicted_close_return = -0.02;
-
-                /* Use real open for first step, predicted for autoregressive */
-                if (first_pred) {
-                    predicted_open = raw_data[end_row].open;
-                    first_pred = 0;
-                } else {
-                    predicted_open = prev_predicted_close;
-                }
-
-                predicted_close = predicted_open * (1.0 + predicted_close_return);
-
-                /* Additional safety: limit max price change per step to ±1% */
-                {
-                    double max_change = predicted_open * 0.01;
-                    double change = predicted_close - predicted_open;
-                    if (change > max_change) {
-                        predicted_close = predicted_open + max_change;
-                    } else if (change < -max_change) {
-                        predicted_close = predicted_open - max_change;
-                    }
-                }
-
-                /* Use a fraction of the real range for estimated high/low. */
-                range = (data_row < num_raw) ?
-                    (raw_data[data_row].high - raw_data[data_row].low) :
-                    (raw_data[end_row].high - raw_data[end_row].low);
-                /* Use 0.25 multiplier to avoid extreme candles */
-                predicted_high = (predicted_close > predicted_open) ?
-                    (predicted_close + range * 0.25) : (predicted_open + range * 0.25);
-                predicted_low = (predicted_close < predicted_open) ?
-                    (predicted_close - range * 0.25) : (predicted_open - range * 0.25);
-
-                prev_predicted_close = predicted_close;
-
-                printf("PRE [%03d] %.5f %.5f %.5f %.5f\n",
-                       p + 1, predicted_open, predicted_high, predicted_low, predicted_close);
-
-                /* Compute features from predicted candle for next autoregressive step */
-                feat_idx = num_available + p;
-
-                /* Feature 0: candle_return */
-                last_cr = (predicted_close - predicted_open) / predicted_open;
-
-                /* Feature 1: candle_range */
-                last_crng = (predicted_high - predicted_low) / predicted_open;
-
-                /* Feature 2: close_return — use real price difference, not normalized */
-                if (feat_idx > 0) {
-                    double prev_close;
-                    /* Get previous close from extended features or real data */
-                    if (feat_idx < num_available) {
-                        /* Previous step was real data */
-                        int prev_data_row = end_row - ref_steps + 1 + (feat_idx - (num_available - ref_steps));
-                        if (prev_data_row > 0 && prev_data_row < num_raw) {
-                            prev_close = raw_data[prev_data_row].close;
-                        } else {
-                            prev_close = raw_data[end_row].close;
-                        }
-                    } else {
-                        /* Previous step was predicted — use prev_predicted_close */
-                        prev_close = prev_predicted_close;
-                    }
-                    if (prev_close > 1e-10) {
-                        last_cret = (predicted_close - prev_close) / prev_close;
-                    } else {
-                        last_cret = 0.0;
-                    }
-                } else {
-                    last_cret = 0.0;
-                }
-
-                /* Feature 3: volume_return — approximate (no volume in autoregressive) */
-                last_vol_ret = 0.0;
-
-                /* Feature 4: ma_diff — approximate using recent prices */
-                last_ma_diff = 0.0;
-                if (feat_idx >= 20) {
-                    double sum_short = 0.0, sum_long = 0.0;
-                    int kk;
-                    /* Use last 5 predicted/real closes */
-                    for (kk = 0; kk < 5; kk++) {
-                        int fidx = feat_idx - kk;
-                        if (fidx < num_available) {
-                            int drow = end_row - ref_steps + 1 + (fidx - (num_available - ref_steps));
-                            if (drow > 0 && drow < num_raw) {
-                                sum_short += raw_data[drow].close;
-                            }
-                        } else {
-                            sum_short += prev_predicted_close;
-                        }
-                    }
-                    sum_short /= 5.0;
-                    /* Use last 20 predicted/real closes */
-                    for (kk = 0; kk < 20; kk++) {
-                        int fidx = feat_idx - kk;
-                        if (fidx < num_available) {
-                            int drow = end_row - ref_steps + 1 + (fidx - (num_available - ref_steps));
-                            if (drow > 0 && drow < num_raw) {
-                                sum_long += raw_data[drow].close;
-                            }
-                        } else {
-                            sum_long += prev_predicted_close;
-                        }
-                    }
-                    sum_long /= 20.0;
-                    if (sum_long > 1e-10) {
-                        last_ma_diff = (sum_short - sum_long) / sum_long;
-                    }
-                }
-
-                /* Feature 5: volatility — approximate using recent returns */
-                last_vol = 0.0;
-
-                /* Normalize features using same params as real data */
-                extended_features[feat_idx][0] = last_cr;
-                extended_features[feat_idx][1] = last_crng;
-                extended_features[feat_idx][2] = last_cret;
-                extended_features[feat_idx][3] = last_vol_ret;
-                extended_features[feat_idx][4] = last_ma_diff;
-                extended_features[feat_idx][5] = last_vol;
-
-                for (fi = 0; fi < num_features; fi++) {
-                    double r = feat_max[fi] - feat_min[fi];
-                    if (r < 1e-15) r = 1.0;
-                    extended_features[feat_idx][fi] = (extended_features[feat_idx][fi] - feat_min[fi]) / r;
-                }
-            }
-
-            /* Cleanup extended features */
-            for (f = 0; f < extended_count; f++) utils_safe_free(extended_features[f]);
-            utils_safe_free(extended_features);
-        } /* end predict loop */
+        if (mode == MODE_OHLC) {
+            predict_ohlc(pred_outputs, num_outputs, seq_len,
+                         lbl_min_arr, lbl_max_arr, ref_close, predict_count);
+        } else {
+            predict_direction(pred_outputs, num_outputs, seq_len, predict_count);
+        }
 
         /* Cleanup */
-        for (f = 0; f < num_available; f++) utils_safe_free(features[f]);
+        for (s = 0; s < seq_len; s++) utils_safe_free(features[s]);
         utils_safe_free(features);
         utils_safe_free(seq_buf);
+        utils_safe_free(pred_outputs);
+        utils_safe_free(feat_min_arr);
+        utils_safe_free(feat_max_arr);
+        utils_safe_free(lbl_min_arr);
+        utils_safe_free(lbl_max_arr);
         utils_safe_free(raw_data);
         lstm_free(pred_network);
         return 0;
@@ -573,7 +485,7 @@ int main(int argc, char *argv[]) {
 
     /* ==================== TRAIN MODE ==================== */
     printf("========================================\n");
-    printf("LSTM Forex Predictor (C90)\n");
+    printf("LSTM Forex Predictor (C90) - Multi-Output OHLC\n");
     printf("========================================\n");
     printf("Parameters:\n");
     printf("  LSTM cells:       %d\n", num_lstm_cells);
@@ -583,6 +495,8 @@ int main(int argc, char *argv[]) {
     printf("  Batch size:       %d\n", batch_size);
     printf("  Momentum:         %.2f\n", momentum);
     printf("  Seed:             %u\n", seed);
+    printf("  Prediction horizon: %d candles (%d outputs)\n", predict_count, num_outputs);
+    printf("  Mode:              %s\n", mode_str);
     printf("========================================\n\n");
 
     /* Step 1: Load raw data */
@@ -597,7 +511,11 @@ int main(int argc, char *argv[]) {
 
     /* Step 2: Build dataset */
     printf("[2/6] Building dataset (features, labels, normalization) ...\n");
-    full_dataset = data_build_dataset(raw_data, num_raw, sequence_length);
+    if (mode == MODE_OHLC) {
+        full_dataset = data_build_dataset_ohlc(raw_data, num_raw, sequence_length, predict_count);
+    } else {
+        full_dataset = data_build_dataset_direction(raw_data, num_raw, sequence_length, predict_count);
+    }
     if (!full_dataset) {
         fprintf(stderr, "Failed to build dataset. Exiting.\n");
         utils_safe_free(raw_data);
@@ -605,6 +523,7 @@ int main(int argc, char *argv[]) {
     }
     printf("  Samples: %d\n", full_dataset->num_samples);
     printf("  Features: %d\n", full_dataset->num_features);
+    printf("  Outputs: %d\n", full_dataset->num_outputs);
     printf("  Feature names:\n");
     for (j = 0; j < full_dataset->num_features; j++) {
         printf("    [%d] %s (min=%.6f, max=%.6f)\n",
@@ -616,7 +535,9 @@ int main(int argc, char *argv[]) {
 
     /* Step 3: Normalize */
     printf("[3/6] Normalizing features ...\n");
-    data_normalize(full_dataset);
+    data_normalize_features(full_dataset);
+    if (mode == MODE_OHLC) data_normalize_labels_ohlc(full_dataset);
+    else data_normalize_labels_direction(full_dataset);
     printf("  Normalization complete.\n\n");
 
     /* Step 4: Split train/test */
@@ -635,9 +556,10 @@ int main(int argc, char *argv[]) {
 
     /* Step 5: Initialize network */
     printf("[5/6] Initializing LSTM network ...\n");
-    network = lstm_init(num_lstm_cells, full_dataset->num_features, seed);
-    printf("  Network initialized with %d cells, %d features.\n\n",
-           num_lstm_cells, full_dataset->num_features);
+    network = lstm_init(num_lstm_cells, full_dataset->num_features, num_outputs, seed);
+    if (mode == MODE_DIRECTION) network->output_activation = ACTIVATION_SIGMOID;
+    printf("  Network initialized with %d cells, %d features, %d outputs.\n\n",
+           num_lstm_cells, full_dataset->num_features, num_outputs);
 
     /* Set global variables for signal handler */
     g_saved_network = network;
@@ -657,6 +579,8 @@ int main(int argc, char *argv[]) {
     g_epochs_trained = 0.0;
     g_best_train_mse = 1e30;
     g_best_test_accuracy = 0.0;
+
+    preds = (double *)utils_safe_calloc((size_t)(num_outputs * sequence_length), sizeof(double));
 
     train_indices = (int *)utils_safe_calloc((size_t)train->num_samples, sizeof(int));
     for (epoch = 0; epoch < train->num_samples; epoch++) {
@@ -694,22 +618,27 @@ int main(int argc, char *argv[]) {
 
             for (b = 0; b < actual_batch; b++) {
                 idx = train_indices[sample + b];
-                pred = lstm_forward(network, train->features[idx],
-                                    cell_states, sequence_length);
+                lstm_forward(network, train->features[idx],
+                            cell_states, sequence_length, preds);
                 lstm_backward(network, train->features[idx],
-                              cell_states, pred, train->labels[idx], sequence_length);
+                              cell_states, preds, train->labels[idx], sequence_length);
             }
 
             lstm_update(network, learning_rate, momentum, actual_batch);
             batch_loss_sum = 0.0;
             for (b = 0; b < actual_batch; b++) {
                 idx = train_indices[sample + b];
-                pred = lstm_forward(network, train->features[idx],
-                                    cell_states, sequence_length);
-                /* MSE loss for regression */
-                batch_loss_sum += 0.5 * (pred - train->labels[idx]) * (pred - train->labels[idx]);
+                lstm_forward(network, train->features[idx],
+                            cell_states, sequence_length, preds);
+                for (o = 0; o < num_outputs; o++) {
+                    int st;
+                    for (st = 0; st < sequence_length; st++) {
+                        double err = preds[st * num_outputs + o] - train->labels[idx][st * num_outputs + o];
+                        batch_loss_sum += 0.5 * err * err;
+                    }
+                }
             }
-            batch_loss_avg = batch_loss_sum / (double)actual_batch;
+            batch_loss_avg = batch_loss_sum / ((double)actual_batch * (double)sequence_length * (double)num_outputs);
             printf("loss=%.8f ", batch_loss_avg);
             fflush(stdout);
 
@@ -749,10 +678,11 @@ int main(int argc, char *argv[]) {
         /* Save model every epoch */
         model_save(model_path, network, (double)(epoch + 1),
                   train_loss, test_acc, full_dataset);
-        fflush(stdout);  /* Ensure model is flushed to disk */
+        fflush(stdout);
     }
 
     utils_safe_free(train_indices);
+    utils_safe_free(preds);
 
     printf("========================================\n");
     printf("Training complete!\n");
@@ -761,15 +691,10 @@ int main(int argc, char *argv[]) {
     printf("\n");
 
     /* Demo: predict on last few candles */
-    printf("Demo: Predicting on last 5 sequences ...\n");
-    demo_start = full_dataset->num_samples - 5;
-    if (demo_start < 0) demo_start = 0;
-    for (d = demo_start; d < full_dataset->num_samples; d++) {
-        pred_demo = lstm_predict(network, full_dataset->features[d], sequence_length);
-        actual = (int)(full_dataset->labels[d] * 10000); /* scale to basis points */
-        predicted = (int)(pred_demo * 10000);
-        printf("  Sample %d: actual=%.4f%%, predicted=%.4f%%\n",
-               d, full_dataset->labels[d] * 100.0, pred_demo * 100.0);
+    if (mode == MODE_OHLC) {
+        demo_ohlc(network, full_dataset, predict_count);
+    } else {
+        demo_direction(network, full_dataset, predict_count);
     }
 
     /* Save final model */

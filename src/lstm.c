@@ -6,7 +6,7 @@
 
 /* ==================== Initialization ==================== */
 
-LSTMNetwork *lstm_init(int num_cells, int num_features, unsigned int seed) {
+LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigned int seed) {
     LSTMNetwork *net;
     int i;
     int fan_in;
@@ -17,6 +17,8 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, unsigned int seed) {
     net = (LSTMNetwork *)utils_safe_malloc(sizeof(LSTMNetwork));
     net->num_cells = num_cells;
     net->num_features = num_features;
+    net->num_outputs = num_outputs;
+    net->output_activation = ACTIVATION_LINEAR;
     fan_in = num_cells + num_features;
     scale = sqrt(2.0 / ((double)(fan_in + num_cells)));
 
@@ -44,15 +46,15 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, unsigned int seed) {
     GATE_ALLOC(candidate);
     #undef GATE_ALLOC
 
-    net->weight_output_layer = matrix_alloc(1, num_cells);
-    net->mweight_output_layer = matrix_alloc(1, num_cells);
-    net->dweight_output_layer = matrix_alloc(1, num_cells);
-    for (i = 0; i < num_cells; i++) {
+    net->weight_output_layer = matrix_alloc(num_outputs, num_cells);
+    net->mweight_output_layer = matrix_alloc(num_outputs, num_cells);
+    net->dweight_output_layer = matrix_alloc(num_outputs, num_cells);
+    for (i = 0; i < num_outputs * num_cells; i++) {
         net->weight_output_layer->data[i] = utils_gaussian_random(0.0, scale);
     }
-    net->bias_output_layer = 0.0;
-    net->mbias_output_layer = 0.0;
-    net->dbias_output_layer = 0.0;
+    net->bias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
+    net->mbias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
+    net->dbias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
 
     return net;
 }
@@ -81,6 +83,9 @@ void lstm_free(LSTMNetwork *net) {
     matrix_free(net->weight_output_layer);
     matrix_free(net->mweight_output_layer);
     matrix_free(net->dweight_output_layer);
+    free(net->bias_output_layer);
+    free(net->mbias_output_layer);
+    free(net->dbias_output_layer);
     free(net);
 }
 
@@ -115,16 +120,17 @@ void lstm_free_cell_state_buffers(LSTMCellState *cell_states, int seq_len) {
 
 /* ==================== Forward Pass ==================== */
 
-double lstm_forward(LSTMNetwork *net, const double *sequence,
-                    LSTMCellState *cell_states, int seq_len) {
-    int t, c, r, f, n, combined;
+void lstm_forward(LSTMNetwork *net, const double *sequence,
+                  LSTMCellState *cell_states, int seq_len,
+                  double *outputs) {
+    int t, c, r, f, n, combined, o;
     double *hidden_state, *cell_state;
     double *forget_gate, *input_gate, *output_gate;
     double *candidate_vec, *concatenated;
     double *Wf, *Wi, *Wo, *Wc;
     double *bf, *bi, *bo, *bc;
     double *W_out;
-    double h_dot, sum, tanh_c, prediction;
+    double sum, tanh_c;
 
     n = net->num_cells;
     f = net->num_features;
@@ -217,14 +223,19 @@ double lstm_forward(LSTMNetwork *net, const double *sequence,
         for (c = 0; c < combined; c++) {
             cell_states[t].concatenated[c] = concatenated[c];
         }
-    }
 
-    /* Output layer */
-    h_dot = net->bias_output_layer;
-    for (c = 0; c < n; c++) {
-        h_dot += W_out[c] * hidden_state[c];
+        /* Output layer at this timestep (many-to-many) */
+        for (o = 0; o < net->num_outputs; o++) {
+            sum = net->bias_output_layer[o];
+            for (c = 0; c < n; c++) {
+                sum += W_out[o * n + c] * hidden_state[c];
+            }
+            if (net->output_activation == ACTIVATION_SIGMOID)
+                outputs[t * net->num_outputs + o] = utils_sigmoid(sum);
+            else
+                outputs[t * net->num_outputs + o] = sum;
+        }
     }
-    prediction = h_dot;
 
     free(hidden_state);
     free(cell_state);
@@ -233,8 +244,6 @@ double lstm_forward(LSTMNetwork *net, const double *sequence,
     free(output_gate);
     free(candidate_vec);
     free(concatenated);
-
-    return prediction;
 }
 
 /* ==================== Gradient Zeroing ==================== */
@@ -262,7 +271,9 @@ void lstm_zero_gradients(LSTMNetwork *net) {
                         (net->dweight_output_layer)->cols; c++) {
         net->dweight_output_layer->data[c] = 0.0;
     }
-    net->dbias_output_layer = 0.0;
+    for (c = 0; c < net->num_outputs; c++) {
+        net->dbias_output_layer[c] = 0.0;
+    }
     
     #undef GATE_ZERO
 }
@@ -271,12 +282,11 @@ void lstm_zero_gradients(LSTMNetwork *net) {
 
 void lstm_backward(LSTMNetwork *net, const double *sequence,
                    const LSTMCellState *cell_states,
-                   double prediction, double target, int seq_len) {
-    int t, c, r, n, f, combined;
-    double d_logit;
+                   const double *predictions, const double *targets,
+                   int seq_len) {
+    int t, c, r, o, n, f, combined;
     double *dhidden, *dcell;
     double *W_out;
-    const double *last_hidden;
     const LSTMCellState *cs;
     const double *c_prev;
     const double *forget_g, *input_g, *output_g, *cand, *concat;
@@ -291,21 +301,10 @@ void lstm_backward(LSTMNetwork *net, const double *sequence,
     f = net->num_features;
     combined = n + f;
 
-    d_logit = prediction - target;
-
-    last_hidden = cell_states[seq_len - 1].hidden_state;
     W_out = net->weight_output_layer->data;
-    for (c = 0; c < n; c++) {
-        net->dweight_output_layer->data[c] += d_logit * last_hidden[c];
-    }
-    net->dbias_output_layer += d_logit;
 
     dhidden = (double *)utils_safe_calloc((size_t)n, sizeof(double));
     dcell = (double *)utils_safe_calloc((size_t)n, sizeof(double));
-    for (c = 0; c < n; c++) {
-        dhidden[c] = d_logit * W_out[c];
-        dcell[c] = 0.0;
-    }
 
     Wf = net->weight_forget_recurrent->data;
     Wi = net->weight_input_recurrent->data;
@@ -313,6 +312,9 @@ void lstm_backward(LSTMNetwork *net, const double *sequence,
     Wc = net->weight_candidate_recurrent->data;
 
     for (t = seq_len - 1; t >= 0; t--) {
+        double d_logit_o;
+        int out_base = t * net->num_outputs;
+
         cs = &cell_states[t];
         c_prev = (t > 0) ? cell_states[t - 1].cell_state : NULL;
         forget_g = cs->forget_gate;
@@ -320,6 +322,21 @@ void lstm_backward(LSTMNetwork *net, const double *sequence,
         output_g = cs->output_gate;
         cand = cs->candidate;
         concat = cs->concatenated;
+
+        /* Add output layer gradient at this timestep (many-to-many) */
+        for (o = 0; o < net->num_outputs; o++) {
+            double pred_o = predictions[out_base + o];
+            d_logit_o = pred_o - targets[out_base + o];
+            if (net->output_activation == ACTIVATION_SIGMOID)
+                d_logit_o *= pred_o * (1.0 - pred_o);
+            for (c = 0; c < n; c++) {
+                net->dweight_output_layer->data[o * n + c] += d_logit_o * cs->hidden_state[c];
+            }
+            net->dbias_output_layer[o] += d_logit_o;
+            for (c = 0; c < n; c++) {
+                dhidden[c] += d_logit_o * W_out[o * n + c];
+            }
+        }
 
         d_output_gate = (double *)utils_safe_calloc((size_t)n, sizeof(double));
         d_cell_from_hidden = (double *)utils_safe_calloc((size_t)n, sizeof(double));
@@ -447,7 +464,10 @@ void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size) {
         net->dweight_output_layer->data[ui] = utils_clip(
             net->dweight_output_layer->data[ui] * inv_batch, CLIP_MIN, CLIP_MAX);
     }
-    net->dbias_output_layer = utils_clip(net->dbias_output_layer * inv_batch, CLIP_MIN, CLIP_MAX);
+    for (ui = 0; ui < net->num_outputs; ui++) {
+        net->dbias_output_layer[ui] = utils_clip(
+            net->dbias_output_layer[ui] * inv_batch, CLIP_MIN, CLIP_MAX);
+    }
 
     #undef CLIP_GRAD
 
@@ -482,21 +502,24 @@ void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size) {
     GATE_UPDATE(candidate);
     #undef GATE_UPDATE
 
-    for (c = 0; c < num_cells; c++) {
-        net->mweight_output_layer->data[c] = momentum * net->mweight_output_layer->data[c]
-                                             - lr * (net->dweight_output_layer->data[c] + weight_decay * net->weight_output_layer->data[c]);
-        net->weight_output_layer->data[c] += net->mweight_output_layer->data[c];
+    /* Output layer update */
+    for (ui = 0; ui < net->num_outputs * num_cells; ui++) {
+        net->mweight_output_layer->data[ui] = momentum * net->mweight_output_layer->data[ui]
+            - lr * (net->dweight_output_layer->data[ui] + weight_decay * net->weight_output_layer->data[ui]);
+        net->weight_output_layer->data[ui] += net->mweight_output_layer->data[ui];
     }
-    net->mbias_output_layer = momentum * net->mbias_output_layer - lr * net->dbias_output_layer;
-    net->bias_output_layer += net->mbias_output_layer;
+    for (c = 0; c < net->num_outputs; c++) {
+        net->mbias_output_layer[c] = momentum * net->mbias_output_layer[c] - lr * net->dbias_output_layer[c];
+        net->bias_output_layer[c] += net->mbias_output_layer[c];
+    }
 }
 
 /* ==================== Loss & Accuracy ==================== */
 
 double lstm_compute_loss(LSTMNetwork *net, Dataset *ds) {
-    int i, t;
+    int i, t, o;
     double total_loss = 0.0;
-    double pred;
+    double *preds;
     double error;
     LSTMCellState *cell_states;
     int n = net->num_cells;
@@ -515,20 +538,26 @@ double lstm_compute_loss(LSTMNetwork *net, Dataset *ds) {
         cell_states[t].concatenated = (double *)utils_safe_calloc((size_t)combined, sizeof(double));
     }
 
+    preds = (double *)utils_safe_calloc((size_t)(net->num_outputs * ds->sequence_length), sizeof(double));
+
     for (i = 0; i < ds->num_samples; i++) {
-        pred = lstm_forward(net, ds->features[i], cell_states, ds->sequence_length);
-        error = pred - ds->labels[i];
-        total_loss += 0.5 * error * error;
+        lstm_forward(net, ds->features[i], cell_states, ds->sequence_length, preds);
+        for (t = 0; t < ds->sequence_length; t++) {
+            for (o = 0; o < net->num_outputs; o++) {
+                error = preds[t * net->num_outputs + o] - ds->labels[i][t * net->num_outputs + o];
+                total_loss += 0.5 * error * error;
+            }
+        }
     }
 
+    free(preds);
     lstm_free_cell_states(cell_states, ds->sequence_length);
-    return total_loss / (double)ds->num_samples;
+    return total_loss / ((double)ds->num_samples * (double)ds->sequence_length * (double)net->num_outputs);
 }
 
 double lstm_compute_accuracy(LSTMNetwork *net, Dataset *ds) {
-    int i, correct = 0, t;
-    double pred;
-    int predicted, actual;
+    int i, t, o, correct = 0;
+    double *preds;
     LSTMCellState *cell_states;
     int n = net->num_cells;
     int combined = n + net->num_features;
@@ -546,22 +575,29 @@ double lstm_compute_accuracy(LSTMNetwork *net, Dataset *ds) {
         cell_states[t].concatenated = (double *)utils_safe_calloc((size_t)combined, sizeof(double));
     }
 
+    preds = (double *)utils_safe_calloc((size_t)(net->num_outputs * ds->sequence_length), sizeof(double));
+
     for (i = 0; i < ds->num_samples; i++) {
-        pred = lstm_forward(net, ds->features[i], cell_states, ds->sequence_length);
-        predicted = (pred > 0.0) ? 1 : 0;
-        actual = (ds->labels[i] > 0.0) ? 1 : 0;
-        if (predicted == actual) correct++;
+        lstm_forward(net, ds->features[i], cell_states, ds->sequence_length, preds);
+        for (t = 0; t < ds->sequence_length; t++) {
+            for (o = 0; o < net->num_outputs; o++) {
+                int predicted = (preds[t * net->num_outputs + o] > 0.0) ? 1 : 0;
+                int actual = (ds->labels[i][t * net->num_outputs + o] > 0.0) ? 1 : 0;
+                if (predicted == actual) correct++;
+            }
+        }
     }
 
+    free(preds);
     lstm_free_cell_states(cell_states, ds->sequence_length);
-    return (double)correct / (double)ds->num_samples;
+    return (double)correct / ((double)ds->num_samples * (double)ds->sequence_length * (double)net->num_outputs);
 }
 
 /* ==================== Predict ==================== */
 
-double lstm_predict(LSTMNetwork *net, const double *sequence, int seq_len) {
+void lstm_predict(LSTMNetwork *net, const double *sequence, int seq_len,
+                  double *outputs) {
     LSTMCellState *cell_states;
-    double pred;
     int t;
     int n = net->num_cells;
     int combined = n + net->num_features;
@@ -579,7 +615,6 @@ double lstm_predict(LSTMNetwork *net, const double *sequence, int seq_len) {
         cell_states[t].concatenated = (double *)utils_safe_calloc((size_t)combined, sizeof(double));
     }
 
-    pred = lstm_forward(net, sequence, cell_states, seq_len);
+    lstm_forward(net, sequence, cell_states, seq_len, outputs);
     lstm_free_cell_states(cell_states, seq_len);
-    return pred;
 }
