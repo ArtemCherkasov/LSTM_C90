@@ -5,7 +5,7 @@
 void *utils_safe_malloc(size_t n) {
     void *p = malloc(n);
     if (!p) {
-        fprintf(stderr, "malloc failed (%zu bytes)\n", n);
+        fprintf(stderr, "malloc failed (%lu bytes)\n", (unsigned long)n);
         exit(EXIT_FAILURE);
     }
     return p;
@@ -14,7 +14,7 @@ void *utils_safe_malloc(size_t n) {
 void *utils_safe_calloc(size_t n, size_t s) {
     void *p = calloc(n, s);
     if (!p) {
-        fprintf(stderr, "calloc failed (%zu x %zu bytes)\n", n, s);
+        fprintf(stderr, "calloc failed (%lu x %lu bytes)\n", (unsigned long)n, (unsigned long)s);
         exit(EXIT_FAILURE);
     }
     return p;

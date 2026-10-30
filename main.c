@@ -244,7 +244,7 @@ int main(int argc, char *argv[]) {
         double ref_close;
 
         seq_len = sequence_length;
-        num_features = 6;
+        num_features = NUM_RAW_FEATURES;
         start_row = 1;
         end_row = raw_line;
         ref_steps = 64;
@@ -308,7 +308,9 @@ int main(int argc, char *argv[]) {
 
         /* Load model */
         pred_network = lstm_init(num_lstm_cells, num_features, num_outputs, seed);
-        if (mode == MODE_DIRECTION) pred_network->output_activation = ACTIVATION_SIGMOID;
+        /* Direction uses sigmoid output + BCE loss */
+        if (mode == MODE_DIRECTION)
+            pred_network->output_activation = ACTIVATION_SIGMOID;
         if (model_load(model_path, pred_network) != 0) {
             fprintf(stderr, "Failed to load model from %s\n", model_path);
             utils_safe_free(raw_data);
@@ -376,64 +378,31 @@ int main(int argc, char *argv[]) {
         seq_buf = (double *)utils_safe_calloc((size_t)(seq_len * num_features), sizeof(double));
         pred_outputs = (double *)utils_safe_calloc((size_t)(num_outputs * seq_len), sizeof(double));
 
-        /* Compute and normalize features for the last seq_len candles before end_row */
+        /* Compute features for all bars up to end_row, then extract last seq_len */
         {
-            int pi;
-            for (s = 0; s < seq_len; s++) {
-                pi = end_row - seq_len + 1 + s;
-                cr = (raw_data[pi].close - raw_data[pi].open) / raw_data[pi].open;
-                rng_val = (raw_data[pi].high - raw_data[pi].low) / raw_data[pi].open;
-                cret = (pi > 0) ? (raw_data[pi].close - raw_data[pi-1].close) / raw_data[pi-1].close : 0.0;
-                vol_ret = (pi > 0 && raw_data[pi-1].tickvol > 0) ?
-                    (raw_data[pi].tickvol - raw_data[pi-1].tickvol) / (double)raw_data[pi-1].tickvol : 0.0;
-                if (vol_ret > 10.0) vol_ret = 10.0;
-                if (vol_ret < -10.0) vol_ret = -10.0;
-                ma_diff = 0.0;
-                if (pi >= 20) {
-                    double sum_short = 0.0, sum_long = 0.0;
-                    for (kk = 0; kk < 5; kk++) sum_short += raw_data[pi - kk].close;
-                    for (kk = 0; kk < 20; kk++) sum_long += raw_data[pi - kk].close;
-                    sum_short /= 5.0;
-                    sum_long /= 20.0;
-                    ma_diff = (sum_short - sum_long) / sum_long;
-                }
-                vol = 0.0;
-                if (pi >= 12) {
-                    double sum_ret = 0.0;
-                    int ret_count = 0;
-                    int mm;
-                    for (mm = pi - 12; mm < pi; mm++) {
-                        if (mm > 0) {
-                            sum_ret += (raw_data[mm].close - raw_data[mm-1].close) / raw_data[mm-1].close;
-                            ret_count++;
-                        }
-                    }
-                    if (ret_count > 0) {
-                        double mean_val = sum_ret / (double)ret_count;
-                        double sum_sq = 0.0;
-                        for (mm = pi - 12; mm < pi; mm++) {
-                            if (mm > 0) {
-                                double r_val = (raw_data[mm].close - raw_data[mm-1].close) / raw_data[mm-1].close;
-                                sum_sq += (r_val - mean_val) * (r_val - mean_val);
-                            }
-                        }
-                        vol = sqrt(sum_sq / (double)ret_count);
-                    }
-                }
-                features[s][0] = cr;
-                features[s][1] = rng_val;
-                features[s][2] = cret;
-                features[s][3] = vol_ret;
-                features[s][4] = ma_diff;
-                features[s][5] = vol;
+            double *temp_feat_min = (double *)utils_safe_calloc((size_t)num_features, sizeof(double));
+            double *temp_feat_max = (double *)utils_safe_calloc((size_t)num_features, sizeof(double));
+            char **temp_feat_names = (char **)utils_safe_calloc((size_t)num_features, sizeof(char *));
+            double **all_features;
+            int fi2;
 
-                /* Normalize features */
-                for (fi = 0; fi < num_features; fi++) {
-                    double r = feat_max_arr[fi] - feat_min_arr[fi];
+            all_features = data_compute_raw_features(raw_data, end_row + 1, num_features,
+                                                      temp_feat_min, temp_feat_max, temp_feat_names);
+
+            for (s = 0; s < seq_len; s++) {
+                int pi = end_row - seq_len + 1 + s;
+                for (fi2 = 0; fi2 < num_features; fi2++) {
+                    double r = feat_max_arr[fi2] - feat_min_arr[fi2];
                     if (r < 1e-15) r = 1.0;
-                    features[s][fi] = (features[s][fi] - feat_min_arr[fi]) / r;
+                    features[s][fi2] = (all_features[pi][fi2] - feat_min_arr[fi2]) / r;
                 }
             }
+
+            data_free_raw_features(all_features, end_row + 1);
+            for (fi2 = 0; fi2 < num_features; fi2++) free(temp_feat_names[fi2]);
+            free(temp_feat_names);
+            free(temp_feat_min);
+            free(temp_feat_max);
         }
 
         /* Build flat sequence buffer */
@@ -557,7 +526,9 @@ int main(int argc, char *argv[]) {
     /* Step 5: Initialize network */
     printf("[5/6] Initializing LSTM network ...\n");
     network = lstm_init(num_lstm_cells, full_dataset->num_features, num_outputs, seed);
-    if (mode == MODE_DIRECTION) network->output_activation = ACTIVATION_SIGMOID;
+    /* Direction uses sigmoid output + BCE loss for binary classification */
+    if (mode == MODE_DIRECTION)
+        network->output_activation = ACTIVATION_SIGMOID;
     printf("  Network initialized with %d cells, %d features, %d outputs.\n\n",
            num_lstm_cells, full_dataset->num_features, num_outputs);
 
@@ -616,28 +587,29 @@ int main(int argc, char *argv[]) {
             /* Zero gradients ONCE before accumulating */
             lstm_zero_gradients(network);
 
+            batch_loss_sum = 0.0;
             for (b = 0; b < actual_batch; b++) {
                 idx = train_indices[sample + b];
                 lstm_forward(network, train->features[idx],
                             cell_states, sequence_length, preds);
                 lstm_backward(network, train->features[idx],
                               cell_states, preds, train->labels[idx], sequence_length);
-            }
-
-            lstm_update(network, learning_rate, momentum, actual_batch);
-            batch_loss_sum = 0.0;
-            for (b = 0; b < actual_batch; b++) {
-                idx = train_indices[sample + b];
-                lstm_forward(network, train->features[idx],
-                            cell_states, sequence_length, preds);
                 for (o = 0; o < num_outputs; o++) {
                     int st;
                     for (st = 0; st < sequence_length; st++) {
-                        double err = preds[st * num_outputs + o] - train->labels[idx][st * num_outputs + o];
-                        batch_loss_sum += 0.5 * err * err;
+                        double p = preds[st * num_outputs + o];
+                        double tgt = train->labels[idx][st * num_outputs + o];
+                        if (network->output_activation == ACTIVATION_SIGMOID)
+                            batch_loss_sum += utils_binary_cross_entropy(p, tgt);
+                        else {
+                            double err = p - tgt;
+                            batch_loss_sum += 0.5 * err * err;
+                        }
                     }
                 }
             }
+
+            lstm_update(network, learning_rate, momentum, actual_batch);
             batch_loss_avg = batch_loss_sum / ((double)actual_batch * (double)sequence_length * (double)num_outputs);
             printf("loss=%.8f ", batch_loss_avg);
             fflush(stdout);

@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-/* ==================== Test: Direction training loop (sigmoid) ==================== */
+/* ==================== Test: Direction training loop (sigmoid + BCE) ==================== */
 
 int test_training_loop_direction(void) {
     DataRow *raw_data;
@@ -28,7 +28,7 @@ int test_training_loop_direction(void) {
     int n, combined;
     int i, j;
 
-    printf("[TEST] Training loop direction (sigmoid, MSE)...");
+    printf("[TEST] Training loop direction (sigmoid + BCE)...");
     fflush(stdout);
 
     num_epochs = 50;
@@ -65,6 +65,7 @@ int test_training_loop_direction(void) {
     }
 
     net = lstm_init(num_cells, full_dataset->num_features, full_dataset->num_outputs, seed);
+    /* Direction uses sigmoid output + BCE loss */
     net->output_activation = ACTIVATION_SIGMOID;
     n = net->num_cells;
     combined = n + net->num_features;

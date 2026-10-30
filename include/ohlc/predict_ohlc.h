@@ -4,7 +4,7 @@
 #include "lstm.h"
 #include "data.h"
 
-/* Print OHLC predictions%te outputs from last timestep */
+/* Print OHLC predictions: takes outputs from last timestep */
 void predict_ohlc(double *pred_outputs, int num_outputs, int seq_len,
                   double *lbl_min_arr, double *lbl_max_arr,
                   double ref_close, int ohlc_predict_count);

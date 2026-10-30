@@ -7,6 +7,9 @@
 #define MODE_OHLC 0
 #define MODE_DIRECTION 1
 
+/* ==================== Feature count ==================== */
+#define NUM_RAW_FEATURES 11
+
 /* ==================== Raw Data Row ==================== */
 typedef struct {
     char date[16];

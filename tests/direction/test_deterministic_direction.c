@@ -2,10 +2,10 @@
 #include <stdio.h>
 #include <math.h>
 
-/* ==================== Deterministic forward+BPTT for direction (sigmoid output) ==================== */
+/* ==================== Deterministic forward+BPTT for direction (sigmoid + BCE) ==================== */
 /* 1 cell, 1 feature, 1 output, 2 timesteps.
  * All gates: w_h=0.1 (recurrent), w_x=0.3 (input), bias=0.
- * Output layer: w=0.5, b=0. Sigmoid activation.
+ * Output layer: w=0.5, b=0. Sigmoid activation + BCE loss.
  * Inputs: x[0]=0.7, x[1]=0.4. Targets: t[0]=0.0, t[1]=1.0.
  * Expected values computed by independent scalar math, compared against LSTM code. */
 
@@ -31,7 +31,7 @@ static void set_simple_weights_dir(LSTMNetwork *net) {
     net->bias_candidate[0] = 0.0;
     net->weight_output_layer->data[0] = DDIR_W_OUT;
     net->bias_output_layer[0] = 0.0;
-    net->output_activation = ACTIVATION_SIGMOID;
+    /* Direction uses sigmoid output + BCE loss */
 }
 
 int test_deterministic_direction(void) {
@@ -42,27 +42,26 @@ int test_deterministic_direction(void) {
     double targets[2] = {0.0, 1.0};
     int fail = 0;
 
-    /* Independent scalar forward — LSTM gates identical to OHLC, only output differs */
+    /* Independent scalar forward — sigmoid output + BCE loss */
     double pre0 = DDIR_W_H * 0.0 + DDIR_W_X * DDIR_X0;
     double f0 = 1.0 / (1.0 + exp(-pre0));
     double i0 = f0, g0 = tanh(pre0), o0 = f0;
     double c0 = i0 * g0;
     double h0 = o0 * tanh(c0);
-    double z0 = DDIR_W_OUT * h0;           /* pre-activation */
-    double y0 = 1.0 / (1.0 + exp(-z0));   /* sigmoid output */
+    double y0 = 1.0 / (1.0 + exp(-DDIR_W_OUT * h0));  /* sigmoid output */
 
     double pre1 = DDIR_W_H * h0 + DDIR_W_X * DDIR_X1;
     double f1 = 1.0 / (1.0 + exp(-pre1));
     double i1 = f1, g1 = tanh(pre1), o1 = f1;
     double c1 = f1 * c0 + i1 * g1;
     double h1 = o1 * tanh(c1);
-    double z1 = DDIR_W_OUT * h1;
-    double y1 = 1.0 / (1.0 + exp(-z1));
+    double y1 = 1.0 / (1.0 + exp(-DDIR_W_OUT * h1));  /* sigmoid output */
 
-    printf("[TEST] Deterministic direction forward+BPTT (1 cell, 2 steps, sigmoid)...");
+    printf("[TEST] Deterministic direction forward+BPTT (1 cell, 2 steps, sigmoid+BCE)...");
     fflush(stdout);
 
     net = lstm_init(1, 1, 1, 42);
+    net->output_activation = ACTIVATION_SIGMOID;
     set_simple_weights_dir(net);
     cs = alloc_cell_states(2, 1, 2);
     lstm_forward(net, sequence, cs, 2, preds);
@@ -72,10 +71,11 @@ int test_deterministic_direction(void) {
     if (fabs(cs[0].hidden_state[0] - h0) > DDIR_TOL) { printf("\n  FAIL: h0=%.10f exp=%.10f", cs[0].hidden_state[0], h0); fail = 1; }
     if (fabs(cs[1].hidden_state[0] - h1) > DDIR_TOL) { printf("\n  FAIL: h1=%.10f exp=%.10f", cs[1].hidden_state[0], h1); fail = 1; }
 
-    /* Independent scalar BPTT — sigmoid derivative: dL/dz = (y-t) * y*(1-y) */
+    /* Independent scalar BPTT — sigmoid + BCE: dL/dz = pred - target
+         (sigmoid derivative cancels with BCE derivative) */
     {
-        double dLdy1_raw = y1 - targets[1];
-        double dLdz1 = dLdy1_raw * y1 * (1.0 - y1);  /* sigmoid derivative */
+        /* sigmoid + BCE: dL/dz = pred - target */
+        double dLdz1 = y1 - targets[1];
         double dLdh1 = dLdz1 * DDIR_W_OUT;
         double tc1 = tanh(c1);
         double dLdc1 = dLdh1 * o1 * (1.0 - tc1 * tc1);
@@ -86,8 +86,8 @@ int test_deterministic_direction(void) {
 
         double dconcat0 = DDIR_W_H * (dLdf1 + dLdi1 + dLdo1 + dLdg1);
 
-        double dLdy0_raw = y0 - targets[0];
-        double dLdz0 = dLdy0_raw * y0 * (1.0 - y0);
+        /* sigmoid + BCE: dL/dz = pred - target */
+        double dLdz0 = y0 - targets[0];
         double dLdh0 = dLdz0 * DDIR_W_OUT + dconcat0;
         double tc0 = tanh(c0);
         double dLdc0 = dLdh0 * o0 * (1.0 - tc0 * tc0) + dLdc1 * f1;

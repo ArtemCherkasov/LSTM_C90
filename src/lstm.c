@@ -46,6 +46,11 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigne
     GATE_ALLOC(candidate);
     #undef GATE_ALLOC
 
+    /* Forget gate bias = 1.0 to prevent gradient vanishing (Jozefowicz et al., 2015) */
+    for (i = 0; i < num_cells; i++) {
+        net->bias_forget[i] = 1.0;
+    }
+
     net->weight_output_layer = matrix_alloc(num_outputs, num_cells);
     net->mweight_output_layer = matrix_alloc(num_outputs, num_cells);
     net->dweight_output_layer = matrix_alloc(num_outputs, num_cells);
@@ -55,6 +60,11 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigne
     net->bias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
     net->mbias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
     net->dbias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
+
+    /* Initialize forget gate bias to 1.0 (Jozefowicz et al., 2015) —
+     * helps prevent early forgetting in the first training steps */
+    for (i = 0; i < num_cells; i++)
+        net->bias_forget[i] = 1.0;
 
     return net;
 }
@@ -326,9 +336,9 @@ void lstm_backward(LSTMNetwork *net, const double *sequence,
         /* Add output layer gradient at this timestep (many-to-many) */
         for (o = 0; o < net->num_outputs; o++) {
             double pred_o = predictions[out_base + o];
+            /* d_logit = pred - target is correct for both:
+             * linear+MSE and sigmoid+BCE (sigmoid derivative cancels with BCE) */
             d_logit_o = pred_o - targets[out_base + o];
-            if (net->output_activation == ACTIVATION_SIGMOID)
-                d_logit_o *= pred_o * (1.0 - pred_o);
             for (c = 0; c < n; c++) {
                 net->dweight_output_layer->data[o * n + c] += d_logit_o * cs->hidden_state[c];
             }
@@ -544,8 +554,14 @@ double lstm_compute_loss(LSTMNetwork *net, Dataset *ds) {
         lstm_forward(net, ds->features[i], cell_states, ds->sequence_length, preds);
         for (t = 0; t < ds->sequence_length; t++) {
             for (o = 0; o < net->num_outputs; o++) {
-                error = preds[t * net->num_outputs + o] - ds->labels[i][t * net->num_outputs + o];
-                total_loss += 0.5 * error * error;
+                double p = preds[t * net->num_outputs + o];
+                double tgt = ds->labels[i][t * net->num_outputs + o];
+                if (net->output_activation == ACTIVATION_SIGMOID)
+                    total_loss += utils_binary_cross_entropy(p, tgt);
+                else {
+                    error = p - tgt;
+                    total_loss += 0.5 * error * error;
+                }
             }
         }
     }
@@ -578,7 +594,7 @@ double lstm_compute_accuracy(LSTMNetwork *net, Dataset *ds) {
     preds = (double *)utils_safe_calloc((size_t)(net->num_outputs * ds->sequence_length), sizeof(double));
 
     {
-        double threshold = (net->output_activation == ACTIVATION_SIGMOID) ? 0.5 : 0.0;
+        double threshold = (ds->mode == MODE_DIRECTION) ? 0.5 : 0.0;
         for (i = 0; i < ds->num_samples; i++) {
             lstm_forward(net, ds->features[i], cell_states, ds->sequence_length, preds);
             for (t = 0; t < ds->sequence_length; t++) {

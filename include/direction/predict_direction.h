@@ -4,7 +4,7 @@
 #include "lstm.h"
 #include "data.h"
 
-/* Print direction predictions: threshold at 0 -> 1 or -1 */
+/* Print direction predictions: threshold at 0.5 -> 1 (up) or 0 (down) */
 void predict_direction(double *pred_outputs, int num_outputs, int seq_len,
                         int ohlc_predict_count);
 

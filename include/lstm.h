@@ -95,6 +95,9 @@ void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size);
 double lstm_compute_loss(LSTMNetwork *net, Dataset *ds);
 double lstm_compute_accuracy(LSTMNetwork *net, Dataset *ds);
 
+/* Zero all gradient accumulators to zero */
+void lstm_zero_gradients(LSTMNetwork *net);
+
 /* Predict: fills outputs array (size = seq_len * net->num_outputs) */
 /* Caller uses last timestep: outputs[(seq_len-1)*num_outputs + o] */
 void lstm_predict(LSTMNetwork *net, const double *sequence, int seq_len,

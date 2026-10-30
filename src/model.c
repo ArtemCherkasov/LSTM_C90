@@ -49,6 +49,7 @@ int model_save(const char *filepath, LSTMNetwork *net,
     else
         fprintf(f, "# predict_count: %d\n", num_out / OUTPUTS_PER_CANDLE);
     fprintf(f, "# mode: %s\n", (norm_params && norm_params->mode == MODE_DIRECTION) ? "direction" : "ohlc");
+    fprintf(f, "# output_activation: %d\n", net->output_activation);
     fprintf(f, "# epochs_trained: %.0f\n", epochs_trained);
     fprintf(f, "# best_train_mse: %.6f\n", best_train_loss);
     fprintf(f, "# best_test_direction_accuracy: %.4f\n\n", best_test_accuracy);
@@ -81,7 +82,7 @@ int model_save(const char *filepath, LSTMNetwork *net,
         for (i = 0; i < n; i++) { \
             fprintf(f, "  row[%d]:", i); \
             for (j = 0; j < combined; j++) { \
-                fprintf(f, " %.6f", net->weight_##name##_recurrent->data[i * combined + j]); \
+                fprintf(f, " %.17g", net->weight_##name##_recurrent->data[i * combined + j]); \
             } \
             fprintf(f, "\n"); \
         } \
@@ -89,13 +90,13 @@ int model_save(const char *filepath, LSTMNetwork *net,
         for (i = 0; i < n; i++) { \
             fprintf(f, "  row[%d]:", i); \
             for (j = 0; j < f_; j++) { \
-                fprintf(f, " %.6f", net->weight_##name##_input->data[i * f_ + j]); \
+                fprintf(f, " %.17g", net->weight_##name##_input->data[i * f_ + j]); \
             } \
             fprintf(f, "\n"); \
         } \
         fprintf(f, #name "_bias:"); \
         for (i = 0; i < n; i++) { \
-            fprintf(f, " %.6f", net->bias_##name[i]); \
+            fprintf(f, " %.17g", net->bias_##name[i]); \
         } \
         fprintf(f, "\n\n"); \
     } while (0)
@@ -111,13 +112,13 @@ int model_save(const char *filepath, LSTMNetwork *net,
     for (i = 0; i < num_out; i++) {
         fprintf(f, "  row[%d]:", i);
         for (j = 0; j < n; j++) {
-            fprintf(f, " %.6f", net->weight_output_layer->data[i * n + j]);
+            fprintf(f, " %.17g", net->weight_output_layer->data[i * n + j]);
         }
         fprintf(f, "\n");
     }
     fprintf(f, "bias_output_layer:");
     for (i = 0; i < num_out; i++) {
-        fprintf(f, " %.6f", net->bias_output_layer[i]);
+        fprintf(f, " %.17g", net->bias_output_layer[i]);
     }
     fprintf(f, "\n");
 
@@ -165,6 +166,12 @@ int model_load(const char *filepath, LSTMNetwork *net) {
         if (strcmp(line, "[normalization]") == 0) { section = SECTION_NORMALIZATION; continue; }
         if (strcmp(line, "[lstm_weights]") == 0) { section = SECTION_LSTM_WEIGHTS; continue; }
         if (strcmp(line, "[output_weights]") == 0) { section = SECTION_OUTPUT_WEIGHTS; continue; }
+
+        /* Parse output_activation from metadata */
+        if (section == SECTION_NONE && strncmp(line, "# output_activation:", 20) == 0) {
+            net->output_activation = atoi(line + 20);
+            continue;
+        }
 
         /* Skip metadata comments but parse gate comments */
         if (section == SECTION_NONE) {

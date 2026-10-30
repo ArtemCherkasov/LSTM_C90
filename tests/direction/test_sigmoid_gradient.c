@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <math.h>
 
-/* ==================== Test: Sigmoid gradient check ==================== */
-/* Verifies BPTT gradients with sigmoid output activation */
+/* ==================== Test: Sigmoid+BCE gradient check ==================== */
+/* Verifies BPTT gradients with sigmoid output + BCE loss */
 
 #define SG_N 16
 #define SG_F 6
@@ -32,7 +32,7 @@ int test_sigmoid_gradient_check(void) {
     double num_grad[6];
     double *weight_ptr[6];
 
-    printf("[TEST] Sigmoid gradient check: %d cells, %d steps, %d outputs", SG_N, SG_T, SG_NUM_OUT);
+    printf("[TEST] Direction gradient check: %d cells, %d steps, %d outputs", SG_N, SG_T, SG_NUM_OUT);
     fflush(stdout);
 
     n = SG_N;
@@ -41,6 +41,7 @@ int test_sigmoid_gradient_check(void) {
     rel_tol = 1e-3;
 
     net = lstm_init(n, SG_F, SG_NUM_OUT, 42);
+    /* Direction uses sigmoid output + BCE loss */
     net->output_activation = ACTIVATION_SIGMOID;
     set_constant_weights(net, SG_W);
 
@@ -97,14 +98,14 @@ int test_sigmoid_gradient_check(void) {
         loss_plus = 0.0;
         for (t = 0; t < SG_T; t++)
             for (o = 0; o < SG_NUM_OUT; o++)
-                loss_plus += 0.5 * (preds[t*SG_NUM_OUT+o] - targets[t*SG_NUM_OUT+o]) * (preds[t*SG_NUM_OUT+o] - targets[t*SG_NUM_OUT+o]);
+                loss_plus += utils_binary_cross_entropy(preds[t*SG_NUM_OUT+o], targets[t*SG_NUM_OUT+o]);
 
         *weight_ptr[i] = orig_w - eps;
         lstm_forward(net, sequence, cell_states, SG_T, preds);
         loss_minus = 0.0;
         for (t = 0; t < SG_T; t++)
             for (o = 0; o < SG_NUM_OUT; o++)
-                loss_minus += 0.5 * (preds[t*SG_NUM_OUT+o] - targets[t*SG_NUM_OUT+o]) * (preds[t*SG_NUM_OUT+o] - targets[t*SG_NUM_OUT+o]);
+                loss_minus += utils_binary_cross_entropy(preds[t*SG_NUM_OUT+o], targets[t*SG_NUM_OUT+o]);
 
         *weight_ptr[i] = orig_w;
         num_grad[i] = (loss_plus - loss_minus) / (2.0 * eps);
@@ -144,10 +145,10 @@ int test_sigmoid_gradient_check(void) {
     lstm_free(net);
 
     if (num_passed == num_checks) {
-        printf("\n  PASS: all sigmoid gradient checks passed\n");
+        printf("\n  PASS: all direction gradient checks passed\n");
         return 1;
     } else {
-        printf("\n  FAIL: %d sigmoid gradient checks failed\n", num_checks - num_passed);
+        printf("\n  FAIL: %d direction gradient checks failed\n", num_checks - num_passed);
         return 0;
     }
 }
