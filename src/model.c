@@ -152,6 +152,39 @@ int model_load(const char *filepath, LSTMNetwork *net) {
     f = fopen(filepath, "r");
     if (!f) return -1;
 
+    /* Validate model dimensions against network */
+    {
+        int model_cells = -1, model_features = -1, model_outputs = -1;
+        char vline[512];
+        while (fgets(vline, sizeof(vline), f)) {
+            utils_trim(vline);
+            if (strncmp(vline, "# num_cells:", 12) == 0)
+                model_cells = atoi(vline + 12);
+            else if (strncmp(vline, "# num_features:", 15) == 0)
+                model_features = atoi(vline + 15);
+            else if (strncmp(vline, "# num_outputs:", 14) == 0)
+                model_outputs = atoi(vline + 14);
+            if (model_cells >= 0 && model_features >= 0 && model_outputs >= 0)
+                break;
+        }
+        rewind(f);
+        if (model_cells >= 0 && model_cells != n) {
+            fprintf(stderr, "Error: model num_cells %d != network num_cells %d\n", model_cells, n);
+            fclose(f);
+            return -1;
+        }
+        if (model_features >= 0 && model_features != f_) {
+            fprintf(stderr, "Error: model num_features %d != network num_features %d\n", model_features, f_);
+            fclose(f);
+            return -1;
+        }
+        if (model_outputs >= 0 && model_outputs != num_out) {
+            fprintf(stderr, "Error: model num_outputs %d != network num_outputs %d\n", model_outputs, num_out);
+            fclose(f);
+            return -1;
+        }
+    }
+
     section = SECTION_NONE;
     gate = -1;
     matrix_type = MATRIX_TYPE_RECURRENT;
@@ -263,7 +296,7 @@ int model_load(const char *filepath, LSTMNetwork *net) {
             if (gate >= 0 && strncmp(line, "row[", strlen("row[")) == 0) {
                 if (sscanf(line, "row[%d]:", &parsed_row) == 1) {
                     char *p = strchr(line, ':');
-                    if (p) {
+                    if (p && parsed_row >= 0 && parsed_row < n) {
                         p++;
                         while (*p == ' ') p++;
                         dim = (matrix_type == MATRIX_TYPE_RECURRENT) ? combined : f_;
@@ -321,7 +354,7 @@ int model_load(const char *filepath, LSTMNetwork *net) {
             if (strncmp(line, "row[", strlen("row[")) == 0) {
                 if (sscanf(line, "row[%d]:", &parsed_row) == 1) {
                     char *p = strchr(line, ':');
-                    if (p) {
+                    if (p && parsed_row >= 0 && parsed_row < num_out) {
                         p++;
                         while (*p == ' ') p++;
                         for (i = 0; i < n && *p; i++) {

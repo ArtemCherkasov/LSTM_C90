@@ -11,6 +11,14 @@
 #define NORMALIZATION_EPSILON 1e-15
 #define VOLUME_RETURN_CLIP 10.0
 
+/* ==================== Day of Week (Zeller) ==================== */
+static int day_of_week(int year, int month, int day) {
+    if (month < 3) { month += 12; year--; }
+    return (day + 13*(month+1)/5 + year + year/4 - year/100 + year/400) % 7;
+    /* Returns: 0=Saturday, 1=Sunday, 2=Monday, ..., 6=Friday */
+    /* Convert to: 0=Monday, ..., 6=Sunday */
+}
+
 /* ==================== CSV Parser ==================== */
 
 static char *skip_quotes(char *p) {
@@ -79,6 +87,51 @@ int data_load_raw(const char *filepath, DataRow **out_rows, int *out_count) {
     return 0;
 }
 
+/* ==================== Timeframe Aggregation ==================== */
+
+void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
+                        DataRow **out_raw, int *out_count) {
+    int num_agg, i, j;
+    DataRow *agg;
+
+    if (h_period <= 1 || !raw || num_raw <= 0) {
+        *out_raw = raw;
+        *out_count = num_raw;
+        return;
+    }
+
+    num_agg = num_raw / h_period;
+    agg = (DataRow *)utils_safe_malloc((size_t)num_agg * sizeof(DataRow));
+
+    for (i = 0; i < num_agg; i++) {
+        int base = i * h_period;
+        double max_high = raw[base].high;
+        double min_low = raw[base].low;
+        double sum_tickvol = 0.0;
+        double sum_vol = 0.0;
+
+        for (j = 0; j < h_period; j++) {
+            if (raw[base + j].high > max_high) max_high = raw[base + j].high;
+            if (raw[base + j].low < min_low) min_low = raw[base + j].low;
+            sum_tickvol += (double)raw[base + j].tickvol;
+            sum_vol += (double)raw[base + j].vol;
+        }
+
+        strcpy(agg[i].date, raw[base].date);
+        strcpy(agg[i].time_, raw[base].time_);
+        agg[i].open = raw[base].open;
+        agg[i].high = max_high;
+        agg[i].low = min_low;
+        agg[i].close = raw[base + h_period - 1].close;
+        agg[i].tickvol = (int)sum_tickvol;
+        agg[i].vol = (int)sum_vol;
+        agg[i].spread = raw[base].spread;
+    }
+
+    *out_raw = agg;
+    *out_count = num_agg;
+}
+
 /* ==================== Feature Engineering (common) ==================== */
 
 double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
@@ -92,7 +145,12 @@ double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
     const char names[][32] = {
         "candle_return", "candle_range", "close_return",
         "volume_return", "ma_diff", "volatility",
-        "rsi", "macd_hist", "bb_position", "atr_norm", "stoch_k"
+        "rsi", "macd_hist", "bb_position", "atr_norm", "stoch_k",
+        "hour", "dow",
+        "mtf_candle_return", "mtf_candle_range", "mtf_close_return",
+        "mtf_volume_return", "mtf_ma_diff", "mtf_volatility",
+        "mtf_rsi", "mtf_macd_hist", "mtf_bb_position", "mtf_atr_norm", "mtf_stoch_k",
+        "mtf_hour", "mtf_dow"
     };
 
     raw_features = (double **)malloc((size_t)num_raw * sizeof(double *));
@@ -244,10 +302,53 @@ double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
         raw_features[i][8]  = bb_pos_arr[i];
         raw_features[i][9]  = atr_norm_arr[i];
         raw_features[i][10] = stoch_k_arr[i] / 100.0;
+        /* Temporal features: hour of day, day of week */
+        {
+            int hour = atoi(raw[i].time_);
+            int yr, mo, dy;
+            sscanf(raw[i].date, "%d.%d.%d", &yr, &mo, &dy);
+            int dow_z = day_of_week(yr, mo, dy);
+            int dow = (dow_z >= 2) ? (dow_z - 2) : (dow_z + 5);
+            raw_features[i][11] = (double)hour / 23.0;
+            raw_features[i][12] = (double)dow / 6.0;
+        }
         for (j = 0; j < num_features; j++) {
             if (raw_features[i][j] < feat_min[j]) feat_min[j] = raw_features[i][j];
             if (raw_features[i][j] > feat_max[j]) feat_max[j] = raw_features[i][j];
         }
+    }
+
+    /* Multi-timeframe features: aggregate raw by 2, compute 13 base features, overlay */
+    if (num_features > 13) {
+        DataRow *mtf_raw; int mtf_count;
+        double **mtf_features;
+        double *mtf_min, *mtf_max;
+        char **mtf_names;
+        int mtf_i;
+
+        data_aggregate_raw(raw, num_raw, 2, &mtf_raw, &mtf_count);
+        mtf_min = (double *)calloc(13, sizeof(double));
+        mtf_max = (double *)calloc(13, sizeof(double));
+        mtf_names = (char **)calloc(13, sizeof(char *));
+        mtf_features = data_compute_raw_features(mtf_raw, mtf_count, 13,
+                                                   mtf_min, mtf_max, mtf_names);
+
+        for (i = 0; i < num_raw; i++) {
+            int mi = i / 2;
+            if (mi >= mtf_count) mi = mtf_count - 1;
+            for (j = 0; j < 13; j++) {
+                raw_features[i][13 + j] = mtf_features[mi][j];
+                if (mtf_features[mi][j] < feat_min[13 + j]) feat_min[13 + j] = mtf_features[mi][j];
+                if (mtf_features[mi][j] > feat_max[13 + j]) feat_max[13 + j] = mtf_features[mi][j];
+            }
+        }
+
+        data_free_raw_features(mtf_features, mtf_count);
+        for (mtf_i = 0; mtf_i < 13; mtf_i++) free(mtf_names[mtf_i]);
+        free(mtf_names);
+        free(mtf_min);
+        free(mtf_max);
+        free(mtf_raw);
     }
 
     free(rsi_arr);

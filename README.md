@@ -124,6 +124,30 @@ Loss суммируется по всем `seq_len × num_outputs` выхода�
 
 Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 
+### Агрегация таймфрейма (`--h`)
+
+Параметр `--h N` группирует каждые N последовательных H1 свечей в одну, создавая более высокий таймфрейм. Все вычисления (признаки, метки, обучение, предсказание) работают с агрегированными данными.
+
+Правила агрегации N свечей H1 в одну:
+
+| Поле | Значение |
+|------|----------|
+| Open | open первой свечи в группе |
+| High | max(high) по всем свечам в группе |
+| Low | min(low) по всем свечам в группе |
+| Close | close последней свечи в группе |
+| TickVol | sum(tickvol) по всем свечам |
+| Date/Time | первой свечи |
+
+Неполная последняя группа отбрасывается.
+
+| Параметр | Строк данных | Описание |
+|----------|-------------|----------|
+| `--h 1` (default) | ~101,000 | исходные H1 свечи |
+| `--h 2` | ~50,500 | H2 — агрегация по 2 свечи |
+| `--h 4` | ~25,250 | H4 — агрегация по 4 свечи |
+| `--h 8` | ~12,600 | H8 — агрегация по 8 свечей |
+
 ### Параметры
 
 **CLI-регулируемые:**
@@ -141,6 +165,7 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 | `--model` | `../resources/model_{mode}_predic_count_N.txt` | Путь к файлу модели |
 | `--line` | 0 | Номер строки CSV для прогноза (0 = обучение) |
 | `--real` | 0 | Вывод реальных данных M баров начиная со строки N (с `--line`) |
+| `--h` | 1 | Агрегация таймфрейма: группировка N свечей H1 в одну (H1=1, H2=2, H4=4, ...) |
 
 **Зашиты в код** (в `lstm.h` / `main.c`):
 
@@ -166,6 +191,7 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 ./LSTM_C90
 ./LSTM_C90 --cells 64 --epochs 50 --lr 0.001 --seq 32 --ohlcpredictcount 5
 ./LSTM_C90 --mode direction --epochs 50 --lr 0.01
+./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --h 4
 ```
 Модель сохраняется в `model_{mode}_predic_count_N.txt` (N = predict_count). **Ctrl+C** — корректное сохранение модели.
 
@@ -173,8 +199,9 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 ```bash
 ./LSTM_C90 --line 100000 --ohlcpredictcount 5
 ./LSTM_C90 --mode direction --line 100000 --directioncount 5
+./LSTM_C90 --mode direction --line 25000 --directioncount 5 --h 4
 ```
-Если `predict_count` или `mode` не совпадают с моделью — ошибка и выход. Один forward pass → `num_outputs` выходов → денормализация → предсказанные значения. **Без авторегрессии.**
+Если `predict_count`, `mode` или `--h` не совпадают с моделью — ошибка и выход. Один forward pass → `num_outputs` выходов → денормализация → предсказанные значения. **Без авторегрессии.**
 
 **3. Реальные данные** (`--line N --real M`):
 ```bash
@@ -493,6 +520,30 @@ For each of `predict_count` future steps (k=1..predict_count): 1 value — proba
 
 Threshold: `pred > 0.5` → up (1), else → down (0).
 
+### Timeframe Aggregation (`--h`)
+
+The `--h N` parameter groups every N consecutive H1 candles into one, creating a higher timeframe. All computations (features, labels, training, prediction) operate on aggregated data.
+
+Aggregation rules for N H1 candles into one:
+
+| Field | Value |
+|-------|-------|
+| Open | open of first candle in group |
+| High | max(high) across all candles in group |
+| Low | min(low) across all candles in group |
+| Close | close of last candle in group |
+| TickVol | sum(tickvol) across all candles |
+| Date/Time | first candle's date/time |
+
+Incomplete last group is dropped.
+
+| Parameter | Data rows | Description |
+|-----------|-----------|-------------|
+| `--h 1` (default) | ~101,000 | original H1 candles |
+| `--h 2` | ~50,500 | H2 — aggregate 2 candles |
+| `--h 4` | ~25,250 | H4 — aggregate 4 candles |
+| `--h 8` | ~12,600 | H8 — aggregate 8 candles |
+
 ### Parameters
 
 **CLI-regulated:**
@@ -510,6 +561,7 @@ Threshold: `pred > 0.5` → up (1), else → down (0).
 | `--model` | `../resources/model_{mode}_predic_count_N.txt` | Path to model file |
 | `--line` | 0 | CSV row number for prediction (0 = training mode) |
 | `--real` | 0 | Output real data for M bars starting at row N (with `--line`) |
+| `--h` | 1 | Timeframe aggregation: group N H1 candles into one (H1=1, H2=2, H4=4, ...) |
 
 **Hardcoded** (in `lstm.h` / `main.c`):
 
@@ -535,6 +587,7 @@ Threshold: `pred > 0.5` → up (1), else → down (0).
 ./LSTM_C90
 ./LSTM_C90 --cells 64 --epochs 50 --lr 0.001 --seq 32 --ohlcpredictcount 5
 ./LSTM_C90 --mode direction --epochs 50 --lr 0.01
+./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --h 4
 ```
 Model saved to `model_{mode}_predic_count_N.txt` (N = predict_count). **Ctrl+C** — graceful model save.
 
@@ -542,8 +595,9 @@ Model saved to `model_{mode}_predic_count_N.txt` (N = predict_count). **Ctrl+C**
 ```bash
 ./LSTM_C90 --line 100000 --ohlcpredictcount 5
 ./LSTM_C90 --mode direction --line 100000 --directioncount 5
+./LSTM_C90 --mode direction --line 25000 --directioncount 5 --h 4
 ```
-If `predict_count` or `mode` doesn't match the model — error and exit. Single forward pass → `num_outputs` outputs → denormalize → predicted values. **No autoregression.**
+If `predict_count`, `mode` or `--h` doesn't match the model — error and exit. Single forward pass → `num_outputs` outputs → denormalize → predicted values. **No autoregression.**
 
 **3. Real data** (`--line N --real M`):
 ```bash

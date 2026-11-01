@@ -8,7 +8,7 @@
 #define MODE_DIRECTION 1
 
 /* ==================== Feature count ==================== */
-#define NUM_RAW_FEATURES 11
+#define NUM_RAW_FEATURES 26
 
 /* ==================== Raw Data Row ==================== */
 typedef struct {
@@ -52,7 +52,12 @@ typedef struct {
 /* Load raw data from MetaTrader CSV (tab-delimited, quoted) */
 int data_load_raw(const char *filepath, DataRow **out_rows, int *out_count);
 
-/* Compute 6 features for all rows. Returns allocated array [num_raw][6]. */
+/* Aggregate raw H1 candles into higher timeframe (h_period candles -> 1) */
+/* Open=first, High=max, Low=min, Close=last, TickVol=sum */
+void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
+                        DataRow **out_raw, int *out_count);
+
+/* Compute NUM_RAW_FEATURES features for all rows. */
 /* Also fills feat_min/feat_max and feat_names in the dataset. */
 double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
                                     double *feat_min, double *feat_max,

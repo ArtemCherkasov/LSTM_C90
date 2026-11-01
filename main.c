@@ -107,6 +107,7 @@ int main(int argc, char *argv[]) {
     int model_path_overridden;
     const char *mode_str;
     int mode;
+    int h_period;
 
     /* Parse CLI arguments */
     num_lstm_cells = DEFAULT_NUM_LSTM_CELLS;
@@ -124,6 +125,7 @@ int main(int argc, char *argv[]) {
     predict_count = DEFAULT_OHLC_PREDICT_COUNT;
     direction_predict_count = DEFAULT_OHLC_PREDICT_COUNT;
     model_path_overridden = 0;
+    h_period = 1;
     mode_str = "ohlc";
     mode = MODE_OHLC;
 
@@ -169,6 +171,10 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--directioncount") == 0 && i + 1 < argc) {
             direction_predict_count = atoi(argv[i + 1]);
             i++;
+        } else if (strcmp(argv[i], "--h") == 0 && i + 1 < argc) {
+            h_period = atoi(argv[i + 1]);
+            if (h_period < 1) h_period = 1;
+            i++;
         } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode_str = argv[i + 1];
             if (strcmp(mode_str, "direction") == 0) mode = MODE_DIRECTION;
@@ -211,6 +217,13 @@ int main(int argc, char *argv[]) {
         if (data_load_raw(data_path, &raw_data, &num_raw) != 0) {
             fprintf(stderr, "Failed to load data.\n");
             return 1;
+        }
+        if (h_period > 1) {
+            DataRow *agg; int agg_count;
+            data_aggregate_raw(raw_data, num_raw, h_period, &agg, &agg_count);
+            utils_safe_free(raw_data);
+            raw_data = agg;
+            num_raw = agg_count;
         }
 
         end_row = raw_line + real_count - 1;
@@ -256,6 +269,13 @@ int main(int argc, char *argv[]) {
         if (data_load_raw(data_path, &raw_data, &num_raw) != 0) {
             fprintf(stderr, "Failed to load data.\n");
             return 1;
+        }
+        if (h_period > 1) {
+            DataRow *agg; int agg_count;
+            data_aggregate_raw(raw_data, num_raw, h_period, &agg, &agg_count);
+            utils_safe_free(raw_data);
+            raw_data = agg;
+            num_raw = agg_count;
         }
 
         /* Validate predict_count against model file */
@@ -418,16 +438,18 @@ int main(int argc, char *argv[]) {
         /* Reference close for denormalization */
         ref_close = raw_data[end_row].close;
 
-        /* Output reference candles */
-        printf("\n  === Full Output: %d reference + %d prediction ===\n", ref_steps, predict_count);
-        {
-            int ref_start = end_row - ref_steps + 1;
-            if (ref_start < 0) ref_start = 0;
-            for (kk = ref_start; kk <= end_row; kk++) {
-                if (kk < 0 || kk >= num_raw) continue;
-                printf("REF [%03d] %.5f %.5f %.5f %.5f\n",
-                       kk - ref_start + 1, raw_data[kk].open, raw_data[kk].high,
-                       raw_data[kk].low, raw_data[kk].close);
+        /* Output reference candles (OHLC mode only) */
+        if (mode == MODE_OHLC) {
+            printf("\n  === Full Output: %d reference + %d prediction ===\n", ref_steps, predict_count);
+            {
+                int ref_start = end_row - ref_steps + 1;
+                if (ref_start < 0) ref_start = 0;
+                for (kk = ref_start; kk <= end_row; kk++) {
+                    if (kk < 0 || kk >= num_raw) continue;
+                    printf("REF [%03d] %.5f %.5f %.5f %.5f\n",
+                           kk - ref_start + 1, raw_data[kk].open, raw_data[kk].high,
+                           raw_data[kk].low, raw_data[kk].close);
+                }
             }
         }
 
@@ -466,6 +488,7 @@ int main(int argc, char *argv[]) {
     printf("  Seed:             %u\n", seed);
     printf("  Prediction horizon: %d candles (%d outputs)\n", predict_count, num_outputs);
     printf("  Mode:              %s\n", mode_str);
+    printf("  Timeframe:         H%d\n", h_period);
     printf("========================================\n\n");
 
     /* Step 1: Load raw data */
@@ -476,7 +499,14 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to load data. Exiting.\n");
         return 1;
     }
-    printf("  Loaded %d rows.\n\n", num_raw);
+    if (h_period > 1) {
+        DataRow *agg; int agg_count;
+        data_aggregate_raw(raw_data, num_raw, h_period, &agg, &agg_count);
+        utils_safe_free(raw_data);
+        raw_data = agg;
+        num_raw = agg_count;
+    }
+    printf("  Loaded %d rows (H%d).\n\n", num_raw, h_period);
 
     /* Step 2: Build dataset */
     printf("[2/6] Building dataset (features, labels, normalization) ...\n");
