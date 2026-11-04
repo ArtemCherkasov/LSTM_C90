@@ -18,6 +18,7 @@ static LSTMNetwork *g_saved_network = NULL;
 static const char *g_model_path = NULL;
 static double g_epochs_trained = 0.0;
 static double g_best_train_mse = 0.0;
+static double g_best_test_loss = 0.0;
 static double g_best_test_accuracy = 0.0;
 static Dataset *g_full_dataset = NULL;
 
@@ -26,7 +27,8 @@ static void signal_handler(int signum) {
     printf("\n\nSignal received, saving model...\n");
     if (g_saved_network != NULL && g_model_path != NULL) {
         model_save(g_model_path, g_saved_network,
-                   g_epochs_trained, g_best_train_mse, g_best_test_accuracy, g_full_dataset);
+                   g_epochs_trained, g_best_train_mse,
+                   g_best_test_loss, g_best_test_accuracy, g_full_dataset);
         printf("Model saved to %s\n", g_model_path);
     }
     exit(1);
@@ -157,6 +159,7 @@ int main(int argc, char *argv[]) {
     int epoch;
     LSTMCellState *cell_states;
     double best_train_loss;
+    double best_test_loss;
     double best_test_accuracy;
     int *train_indices;
     int sample;
@@ -193,6 +196,9 @@ int main(int argc, char *argv[]) {
     const char *mode_str;
     int mode;
     int h_period;
+    double weight_decay;
+    int patience;
+    int patience_counter;
 
     /* Parse CLI arguments */
     num_lstm_cells = DEFAULT_NUM_LSTM_CELLS;
@@ -216,6 +222,9 @@ int main(int argc, char *argv[]) {
     predict_count = DEFAULT_OHLC_PREDICT_COUNT;
     model_path_overridden = 0;
     h_period = 1;
+    weight_decay = 1e-6;
+    patience = 0;
+    patience_counter = 0;
     mode_str = "ohlc";
     mode = MODE_OHLC;
 
@@ -269,6 +278,12 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--h") == 0 && i + 1 < argc) {
             h_period = atoi(argv[i + 1]);
             if (h_period < 1) h_period = 1;
+            i++;
+        } else if (strcmp(argv[i], "--wd") == 0 && i + 1 < argc) {
+            weight_decay = atof(argv[i + 1]);
+            i++;
+        } else if (strcmp(argv[i], "--patience") == 0 && i + 1 < argc) {
+            patience = atoi(argv[i + 1]);
             i++;
         } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode_str = argv[i + 1];
@@ -710,14 +725,19 @@ int main(int argc, char *argv[]) {
     /* Direction uses sigmoid output + BCE loss for binary classification */
     if (mode == MODE_DIRECTION)
         network->output_activation = ACTIVATION_SIGMOID;
-    printf("  Network initialized with %d cells, %d features, %d outputs.\n\n",
+    network->weight_decay = weight_decay;
+    printf("  Network initialized with %d cells, %d features, %d outputs.\n",
            num_lstm_cells, full_dataset->num_features, num_outputs);
+    printf("  Weight decay (L2): %.2e\n", weight_decay);
+    if (patience > 0)
+        printf("  Early stopping patience: %d epochs\n", patience);
 
     /* Set global variables for signal handler */
     g_saved_network = network;
     g_model_path = model_path;
     g_full_dataset = full_dataset;
     g_best_train_mse = 1e30;
+    g_best_test_loss = 1e30;
     g_best_test_accuracy = 0.0;
 
     /* Step 6: Train */
@@ -725,11 +745,13 @@ int main(int argc, char *argv[]) {
     printf("========================================\n");
 
     best_train_loss = 1e30;
+    best_test_loss = 1e30;
     best_test_accuracy = 0.0;
 
     /* Sync globals */
     g_epochs_trained = 0.0;
     g_best_train_mse = 1e30;
+    g_best_test_loss = 1e30;
     g_best_test_accuracy = 0.0;
 
     preds = (double *)utils_safe_calloc((size_t)(num_outputs * sequence_length), sizeof(double));
@@ -805,13 +827,24 @@ int main(int argc, char *argv[]) {
         test_loss = lstm_compute_loss(network, test);
         test_acc = lstm_compute_accuracy(network, test);
 
-        if (train_loss < best_train_loss) {
+        /* Save best model based on test loss */
+        if (test_loss < best_test_loss) {
+            best_test_loss = test_loss;
             best_train_loss = train_loss;
             best_test_accuracy = test_acc;
+            patience_counter = 0;
+
             /* Sync globals for signal handler */
             g_epochs_trained = (double)(epoch + 1);
             g_best_train_mse = best_train_loss;
+            g_best_test_loss = best_test_loss;
             g_best_test_accuracy = best_test_accuracy;
+
+            /* Save model only when test loss improves */
+            model_save(model_path, network, (double)(epoch + 1),
+                      train_loss, test_loss, test_acc, full_dataset);
+        } else {
+            patience_counter++;
         }
 
         /* Progress bar */
@@ -823,15 +856,16 @@ int main(int argc, char *argv[]) {
             else if (i == progress) printf("> ");
             else printf("  ");
         }
-        printf("] %.1f%% | loss: %.8f | acc: %.2f%% | test_acc: %.2f%%\n",
+        printf("] %.1f%% | tr_loss: %.6f | te_loss: %.6f | te_acc: %.2f%% | best_te_loss: %.6f\n",
                (double)(epoch + 1) / (double)num_epochs * 100.0,
-               train_loss, train_acc * 100.0, test_acc * 100.0);
+               train_loss, test_loss, test_acc * 100.0, best_test_loss);
         fflush(stdout);
 
-        /* Save model every epoch */
-        model_save(model_path, network, (double)(epoch + 1),
-                  train_loss, test_acc, full_dataset);
-        fflush(stdout);
+        /* Early stopping */
+        if (patience > 0 && patience_counter >= patience) {
+            printf("\n*** Early stopping: test loss hasn't improved for %d epochs ***\n", patience);
+            break;
+        }
     }
 
     utils_safe_free(train_indices);
@@ -839,8 +873,9 @@ int main(int argc, char *argv[]) {
 
     printf("========================================\n");
     printf("Training complete!\n");
-    printf("Best train MSE:      %.6f\n", best_train_loss);
-    printf("Best test direction accuracy: %.4f\n", best_test_accuracy);
+    printf("Best train loss:       %.6f\n", best_train_loss);
+    printf("Best test loss:        %.6f\n", best_test_loss);
+    printf("Best test accuracy:    %.4f\n", best_test_accuracy);
     printf("\n");
 
     /* Demo: predict on last few candles */
@@ -853,7 +888,7 @@ int main(int argc, char *argv[]) {
     /* Save final model */
     printf("\nSaving final model to %s ...\n", model_path);
     model_save(model_path, network, (double)num_epochs,
-               best_train_loss, best_test_accuracy, full_dataset);
+               best_train_loss, best_test_loss, best_test_accuracy, full_dataset);
 
     /* Cleanup */
     g_saved_network = NULL;

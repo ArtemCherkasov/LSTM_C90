@@ -25,7 +25,8 @@
 
 int model_save(const char *filepath, LSTMNetwork *net,
                double epochs_trained, double best_train_loss,
-               double best_test_accuracy, Dataset *norm_params) {
+               double best_test_loss, double best_test_accuracy,
+               Dataset *norm_params) {
     FILE *f;
     int n, f_, combined, num_out, i, j;
 
@@ -54,10 +55,12 @@ int model_save(const char *filepath, LSTMNetwork *net,
     fprintf(f, "# epochs_trained: %.0f\n", epochs_trained);
     if (norm_params && norm_params->mode == MODE_DIRECTION) {
         fprintf(f, "# best_train_bce: %.6f\n", best_train_loss);
+        fprintf(f, "# best_test_bce: %.6f\n", best_test_loss);
         fprintf(f, "# best_test_accuracy: %.4f\n\n", best_test_accuracy);
     } else {
         fprintf(f, "# best_train_mse: %.6f\n", best_train_loss);
-        fprintf(f, "# best_test_mse: %.4f\n\n", best_test_accuracy);
+        fprintf(f, "# best_test_mse: %.6f\n", best_test_loss);
+        fprintf(f, "# best_test_mse_acc: %.4f\n\n", best_test_accuracy);
     }
 
     if (norm_params) {

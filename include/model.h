@@ -10,7 +10,8 @@
 /* Save network to human-readable text file */
 int model_save(const char *filepath, LSTMNetwork *net,
                double epochs_trained, double best_train_loss,
-               double best_test_accuracy, Dataset *norm_params);
+               double best_test_loss, double best_test_accuracy,
+               Dataset *norm_params);
 
 /* Load network from human-readable text file */
 int model_load(const char *filepath, LSTMNetwork *net);

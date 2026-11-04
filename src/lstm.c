@@ -19,6 +19,7 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigne
     net->num_features = num_features;
     net->num_outputs = num_outputs;
     net->output_activation = ACTIVATION_LINEAR;
+    net->weight_decay = 1e-6;
     fan_in = num_cells + num_features;
     scale = sqrt(2.0 / ((double)(fan_in + num_cells)));
 
@@ -444,7 +445,7 @@ void lstm_backward(LSTMNetwork *net, const double *sequence,
 void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size) {
     int c, ui;
     int num_cells = net->num_cells;
-    double weight_decay = 1e-6;
+    double weight_decay = net->weight_decay;
     double inv_batch = 1.0 / (double)batch_size;
 
     /* Normalize gradients by batch size and clip */

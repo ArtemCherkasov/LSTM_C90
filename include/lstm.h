@@ -18,6 +18,7 @@ typedef struct {
     int num_features;
     int num_outputs;
     int output_activation;  /* 0=linear, 1=sigmoid */
+    double weight_decay;     /* L2 regularization strength */
 
     /* Weight matrices for each gate: [num_cells x num_cells] (recurrent)
      *                      and [num_cells x num_features] (input) */
