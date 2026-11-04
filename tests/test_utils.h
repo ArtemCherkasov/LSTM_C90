@@ -68,6 +68,15 @@ int test_bptt_gradient_check_26(void);
 int test_forward_26_features(void);
 int test_backward_26_features(void);
 
+/* Data I/O tests */
+int test_load_raw_basic(void);
+int test_load_raw_chronological(void);
+int test_aggregate_h2(void);
+int test_aggregate_h4(void);
+int test_aggregate_h8(void);
+int test_aggregate_h1_identity(void);
+int test_aggregate_double_h2(void);
+
 /* OHLC-specific */
 int test_training_loop_ohlc(void);
 int test_volume_clip_and_label_norm_ohlc(void);

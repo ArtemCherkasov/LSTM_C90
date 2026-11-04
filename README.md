@@ -31,7 +31,7 @@ make LSTM_C90
 
 ```bash
 ./test_lstm
-# Ожидаемый результат: Results: 24/24 tests passed
+# Ожидаемый результат: Results: 31/31 tests passed
 ```
 
 ### Формат данных
@@ -180,9 +180,11 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 | `--epochs` | 100 | Кол-во эпох обучения |
 | `--lr` | 0.005 | Learning rate (SGD) |
 | `--seq` | 64 | Длина входной последовательности (баров) |
-| `--mode` | `ohlc` | Режим: `ohlc`, `direction`, `ohlcpredict`, `directionpredict` |
+| `--mode` | `ohlc` | Режим: `ohlc`, `direction`, `ohlcpredict`, `directionpredict`, `realdata` |
 | `--output` | 1 | Кол-во выходов (OHLC векторов или шагов направления) |
 | `--datetime` | — | `YYYY.MM.DDThh:mm:ss` — дата-время для прогноза (обязательно для predict-режимов) |
+| `--from` | — | `YYYY.MM.DDThh:mm:ss` — начало диапазона для `--mode realdata` |
+| `--to` | — | `YYYY.MM.DDThh:mm:ss` — конец диапазона для `--mode realdata` |
 | `--data` | `../resources/EURUSD_*.csv` | Путь к CSV-файлу |
 | `--model` | `../resources/model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt` | Путь к файлу модели |
 | `--h` | 1 | Агрегация таймфрейма: группировка N свечей H1 в одну (H1=1, H2=2, H4=4, ...) |
@@ -225,6 +227,19 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 ./LSTM_C90 --mode directionpredict --datetime 2024.01.15T08:00:00 --output 3 --h 4
 ```
 Если `predict_count`, `mode`, `seq` или `--h` не совпадают с моделью — ошибка и выход. Один forward pass → `num_outputs` выходов → денормализация → предсказанные значения. Выводятся только строки прогноза в количестве `--output`. **Без авторегрессии.**
+
+**3. Реальные данные** (`--mode realdata`):
+```bash
+# Все котировки из файла
+./LSTM_C90 --mode realdata
+# С указанной даты до конца файла
+./LSTM_C90 --mode realdata --from 2024.01.15T08:00:00
+# В промежутке от --from до --to
+./LSTM_C90 --mode realdata --from 2024.01.15T08:00:00 --to 2024.02.15T08:00:00
+# С агрегацией таймфрейма H4
+./LSTM_C90 --mode realdata --from 2024.01.15T08:00:00 --to 2024.02.15T08:00:00 --h 4
+```
+Вывод: `YYYY.MM.DDThh:mm:ss O H L C TICKVOL` — по одной строке на свечу. Агрегация `--h` применяется так же, как при обучении и прогнозе.
 
 ### Формат файла модели
 
@@ -362,7 +377,7 @@ Output layer: `weight_output_layer` [num_outputs × n], `bias_output_layer` [num
 
 ### Тесты
 
-24 теста, разбиты по файлам, все проходят:
+31 тест, разбиты по файлам, все проходят:
 
 **Общие LSTM тесты (13):**
 
@@ -391,22 +406,34 @@ Output layer: `weight_output_layer` [num_outputs × n], `bias_output_layer` [num
 | 16 | `test_deterministic.c` | `test_deterministic_forward_26` | 32 cells × 8 steps × 26 features: H, C совпадают с аналитикой |
 | 17 | `test_gradient.c` | `test_bptt_gradient_check_26` | 32 cells × 8 steps × 26 features: 8 gradient checks |
 
+**Data I/O тесты (7):**
+
+| # | Файл | Тест | Описание |
+|---|------|------|----------|
+| 18 | `test_data_io.c` | `test_load_raw_basic` | Загрузка CSV: >1000 строк, валидные OHLC |
+| 19 | `test_data_io.c` | `test_load_raw_chronological` | Строки в хронологическом порядке |
+| 20 | `test_data_io.c` | `test_aggregate_h1_identity` | h=1 возвращает исходные данные |
+| 21 | `test_data_io.c` | `test_aggregate_h2` | h=2: Open/High/Low/Close/TickVol/Date проверены |
+| 22 | `test_data_io.c` | `test_aggregate_h4` | h=4: аналогично |
+| 23 | `test_data_io.c` | `test_aggregate_h8` | h=8: аналогично |
+| 24 | `test_data_io.c` | `test_aggregate_double_h2` | h=2 затем h=2 равно h=4 |
+
 **OHLC тесты (3):**
 
 | # | Файл | Тест | Описание |
 |---|------|------|----------|
-| 18 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE уменьшается (OHLC labels, many-to-many) |
-| 19 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels в [-1,1] |
-| 20 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 шага, linear) |
+| 25 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE уменьшается (OHLC labels, many-to-many) |
+| 26 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels в [-1,1] |
+| 27 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 шага, linear) |
 
 **Direction тесты (4):**
 
 | # | Файл | Тест | Описание |
 |---|------|------|----------|
-| 21 | `direction/test_data_direction.c` | `test_direction_labels` | Все labels ровно 0 или 1 |
-| 22 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE уменьшается (sigmoid output, labels 0/1) |
-| 23 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
-| 24 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 шага, sigmoid+BCE) |
+| 28 | `direction/test_data_direction.c` | `test_direction_labels` | Все labels ровно 0 или 1 |
+| 29 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE уменьшается (sigmoid output, labels 0/1) |
+| 30 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
+| 31 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 шага, sigmoid+BCE) |
 
 
 ## 🇬🇧
@@ -438,7 +465,7 @@ make LSTM_C90
 
 ```bash
 ./test_lstm
-# Expected output: Results: 24/24 tests passed
+# Expected output: Results: 31/31 tests passed
 ```
 
 ### Data Format
@@ -587,9 +614,11 @@ Incomplete last group is dropped.
 | `--epochs` | 100 | Training epochs |
 | `--lr` | 0.005 | Learning rate (SGD) |
 | `--seq` | 64 | Input sequence length (bars) |
-| `--mode` | `ohlc` | Mode: `ohlc`, `direction`, `ohlcpredict`, `directionpredict` |
+| `--mode` | `ohlc` | Mode: `ohlc`, `direction`, `ohlcpredict`, `directionpredict`, `realdata` |
 | `--output` | 1 | Number of outputs (OHLC vectors or direction steps) |
 | `--datetime` | — | `YYYY.MM.DDThh:mm:ss` — datetime for prediction (required for predict modes) |
+| `--from` | — | `YYYY.MM.DDThh:mm:ss` — range start for `--mode realdata` |
+| `--to` | — | `YYYY.MM.DDThh:mm:ss` — range end for `--mode realdata` |
 | `--data` | `../resources/EURUSD_*.csv` | Path to CSV file |
 | `--model` | `../resources/model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt` | Path to model file |
 | `--h` | 1 | Timeframe aggregation: group N H1 candles into one (H1=1, H2=2, H4=4, ...) |
@@ -632,6 +661,19 @@ Model saved to `model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt`. **Ctrl+C**
 ./LSTM_C90 --mode directionpredict --datetime 2024.01.15T08:00:00 --output 3 --h 4
 ```
 If `predict_count`, `mode`, `seq` or `--h` doesn't match the model — error and exit. Single forward pass → `num_outputs` outputs → denormalize → predicted values. Only prediction rows are output, in the quantity specified by `--output`. **No autoregression.**
+
+**3. Real data** (`--mode realdata`):
+```bash
+# All quotes from file
+./LSTM_C90 --mode realdata
+# From specified datetime to end of file
+./LSTM_C90 --mode realdata --from 2024.01.15T08:00:00
+# In range from --from to --to
+./LSTM_C90 --mode realdata --from 2024.01.15T08:00:00 --to 2024.02.15T08:00:00
+# With H4 timeframe aggregation
+./LSTM_C90 --mode realdata --from 2024.01.15T08:00:00 --to 2024.02.15T08:00:00 --h 4
+```
+Output: `YYYY.MM.DDThh:mm:ss O H L C TICKVOL` — one line per candle. Aggregation via `--h` is applied the same way as in training and prediction.
 
 ### Model File Format
 
@@ -709,7 +751,7 @@ Weights are saved with full double precision (`%.17g`). `output_activation`: 0=l
 
 ### Tests
 
-24 tests, split across files, all passing:
+31 tests, split across files, all passing:
 
 **Common LSTM tests (13):**
 
@@ -738,19 +780,31 @@ Weights are saved with full double precision (`%.17g`). `output_activation`: 0=l
 | 16 | `test_deterministic.c` | `test_deterministic_forward_26` | 32 cells × 8 steps × 26 features: H, C match analytical |
 | 17 | `test_gradient.c` | `test_bptt_gradient_check_26` | 32 cells × 8 steps × 26 features: 8 gradient checks |
 
+**Data I/O tests (7):**
+
+| # | File | Test | Description |
+|---|------|------|-------------|
+| 18 | `test_data_io.c` | `test_load_raw_basic` | CSV loading: >1000 rows, valid OHLC |
+| 19 | `test_data_io.c` | `test_load_raw_chronological` | Rows in chronological order |
+| 20 | `test_data_io.c` | `test_aggregate_h1_identity` | h=1 returns original data unchanged |
+| 21 | `test_data_io.c` | `test_aggregate_h2` | h=2: Open/High/Low/Close/TickVol/Date verified |
+| 22 | `test_data_io.c` | `test_aggregate_h4` | h=4: same verification |
+| 23 | `test_data_io.c` | `test_aggregate_h8` | h=8: same verification |
+| 24 | `test_data_io.c` | `test_aggregate_double_h2` | h=2 then h=2 equals h=4 |
+
 **OHLC tests (3):**
 
 | # | File | Test | Description |
 |---|------|------|-------------|
-| 18 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE decreases (OHLC labels, many-to-many) |
-| 19 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels in [-1,1] |
-| 20 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 steps, linear) |
+| 25 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE decreases (OHLC labels, many-to-many) |
+| 26 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels in [-1,1] |
+| 27 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 steps, linear) |
 
 **Direction tests (4):**
 
 | # | File | Test | Description |
 |---|------|------|-------------|
-| 21 | `direction/test_data_direction.c` | `test_direction_labels` | All labels are exactly 0 or 1 |
-| 22 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE decreases (sigmoid output, labels 0/1) |
-| 23 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
-| 24 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 steps, sigmoid+BCE) |
+| 28 | `direction/test_data_direction.c` | `test_direction_labels` | All labels are exactly 0 or 1 |
+| 29 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE decreases (sigmoid output, labels 0/1) |
+| 30 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
+| 31 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 steps, sigmoid+BCE) |

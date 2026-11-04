@@ -54,10 +54,7 @@ static void shuffle_indices(int *indices, int count, unsigned int seed) {
 #define DEFAULT_BATCH_SIZE 32
 #define DEFAULT_MOMENTUM 0.9
 #define DEFAULT_SEED 42
-#define TRAIN_TEST_RATIO 0.8
 #define PROGRESS_BAR_WIDTH 30
-#define LOSS_SCALE 1000
-#define MODEL_PATH "../resources/model.txt"
 
 /* ==================== Currency pair extraction ==================== */
 
@@ -79,8 +76,11 @@ static void extract_currency_pair(const char *data_path, char *pair_out) {
 static int find_row_by_datetime(DataRow *raw, int num_raw, const char *datetime_str) {
     char date_part[16];
     char time_part[16];
+    char target_dt[32];
     int i;
     const char *t_pos;
+    int lo, hi, mid, cmp;
+    char row_dt[32];
 
     t_pos = strchr(datetime_str, 'T');
     if (!t_pos) return -1;
@@ -98,11 +98,46 @@ static int find_row_by_datetime(DataRow *raw, int num_raw, const char *datetime_
         time_part[tlen] = 0;
     }
 
-    for (i = 0; i < num_raw; i++) {
-        if (strcmp(raw[i].date, date_part) == 0 && strcmp(raw[i].time_, time_part) == 0)
-            return i;
+    snprintf(target_dt, sizeof(target_dt), "%s %s", date_part, time_part);
+
+    /* Binary search for insertion point: first row >= target */
+    lo = 0;
+    hi = num_raw;
+    while (lo < hi) {
+        mid = (lo + hi) / 2;
+        snprintf(row_dt, sizeof(row_dt), "%s %s", raw[mid].date, raw[mid].time_);
+        if (strcmp(row_dt, target_dt) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
     }
-    return -1;
+
+    /* lo is the first row >= target; lo-1 is the last row < target */
+    if (lo < num_raw) {
+        snprintf(row_dt, sizeof(row_dt), "%s %s", raw[lo].date, raw[lo].time_);
+        if (strcmp(row_dt, target_dt) == 0)
+            return lo;  /* exact match */
+    }
+
+    /* Compare neighbors lo-1 and lo, pick closest */
+    if (lo == 0)
+        return (num_raw > 0) ? 0 : -1;
+    if (lo >= num_raw)
+        return num_raw - 1;
+
+    /* Both lo-1 and lo are valid; compare string distances */
+    {
+        char prev_dt[32];
+        int cmp_prev, cmp_next;
+        snprintf(prev_dt, sizeof(prev_dt), "%s %s", raw[lo - 1].date, raw[lo - 1].time_);
+        snprintf(row_dt, sizeof(row_dt), "%s %s", raw[lo].date, raw[lo].time_);
+        cmp_prev = strcmp(target_dt, prev_dt);  /* > 0 since prev < target */
+        cmp_next = strcmp(row_dt, target_dt);   /* > 0 since next >= target */
+        if (cmp_prev <= cmp_next)
+            return lo - 1;
+        else
+            return lo;
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -137,8 +172,13 @@ int main(int argc, char *argv[]) {
     int d;
     int output_count;
     int is_prediction;
+    int is_realdata;
     char datetime_str[32];
     int has_datetime;
+    char from_str[32];
+    int has_from;
+    char to_str[32];
+    int has_to;
     char currency_pair[8];
     double batch_loss_sum;
     double batch_loss_avg;
@@ -146,7 +186,6 @@ int main(int argc, char *argv[]) {
     int progress;
     double *preds;
     int o;
-    int kk;
     int predict_count;
     int num_outputs;
     char model_path_buf[256];
@@ -165,8 +204,13 @@ int main(int argc, char *argv[]) {
     seed = DEFAULT_SEED;
     output_count = 1;
     is_prediction = 0;
+    is_realdata = 0;
     has_datetime = 0;
     datetime_str[0] = 0;
+    has_from = 0;
+    from_str[0] = 0;
+    has_to = 0;
+    to_str[0] = 0;
     data_path = "../resources/EURUSD_H1_200906120000_202509251100.csv";
     model_path = NULL;
     predict_count = DEFAULT_OHLC_PREDICT_COUNT;
@@ -212,6 +256,16 @@ int main(int argc, char *argv[]) {
             datetime_str[sizeof(datetime_str) - 1] = 0;
             has_datetime = 1;
             i++;
+        } else if (strcmp(argv[i], "--from") == 0 && i + 1 < argc) {
+            strncpy(from_str, argv[i + 1], sizeof(from_str) - 1);
+            from_str[sizeof(from_str) - 1] = 0;
+            has_from = 1;
+            i++;
+        } else if (strcmp(argv[i], "--to") == 0 && i + 1 < argc) {
+            strncpy(to_str, argv[i + 1], sizeof(to_str) - 1);
+            to_str[sizeof(to_str) - 1] = 0;
+            has_to = 1;
+            i++;
         } else if (strcmp(argv[i], "--h") == 0 && i + 1 < argc) {
             h_period = atoi(argv[i + 1]);
             if (h_period < 1) h_period = 1;
@@ -229,6 +283,10 @@ int main(int argc, char *argv[]) {
                 mode = MODE_OHLC;
                 mode_str = "ohlc";
                 is_prediction = 1;
+            } else if (strcmp(mode_str, "realdata") == 0) {
+                mode = MODE_OHLC;
+                mode_str = "ohlc";
+                is_realdata = 1;
             } else {
                 mode = MODE_OHLC;
                 is_prediction = 0;
@@ -263,9 +321,65 @@ int main(int argc, char *argv[]) {
         model_path = model_path_buf;
     }
 
+    /* ==================== REAL DATA MODE ==================== */
+    if (is_realdata) {
+        int from_row, to_row, k;
+
+        /* Load data */
+        raw_data = NULL;
+        num_raw = 0;
+        if (data_load_raw(data_path, &raw_data, &num_raw) != 0) {
+            fprintf(stderr, "Failed to load data.\n");
+            return 1;
+        }
+        if (h_period > 1) {
+            DataRow *agg; int agg_count;
+            data_aggregate_raw(raw_data, num_raw, h_period, &agg, &agg_count);
+            utils_safe_free(raw_data);
+            raw_data = agg;
+            num_raw = agg_count;
+        }
+
+        from_row = 0;
+        to_row = num_raw - 1;
+
+        if (has_from) {
+            from_row = find_row_by_datetime(raw_data, num_raw, from_str);
+            if (from_row < 0) {
+                fprintf(stderr, "Error: no data available\n");
+                utils_safe_free(raw_data);
+                return 1;
+            }
+        }
+        if (has_to) {
+            to_row = find_row_by_datetime(raw_data, num_raw, to_str);
+            if (to_row < 0) {
+                fprintf(stderr, "Error: no data available\n");
+                utils_safe_free(raw_data);
+                return 1;
+            }
+        }
+
+        if (from_row > to_row) {
+            fprintf(stderr, "Error: --from is after --to\n");
+            utils_safe_free(raw_data);
+            return 1;
+        }
+
+        for (k = from_row; k <= to_row; k++) {
+            printf("%sT%s %.5f %.5f %.5f %.5f %d\n",
+                   raw_data[k].date, raw_data[k].time_,
+                   raw_data[k].open, raw_data[k].high,
+                   raw_data[k].low, raw_data[k].close,
+                   raw_data[k].tickvol);
+        }
+        utils_safe_free(raw_data);
+        return 0;
+    }
+
     /* ==================== PREDICTION MODE ==================== */
     if (is_prediction) {
-        int seq_len, num_features, start_row, end_row;
+        int seq_len, num_features, end_row;
         int fi, s, norm_count;
         double *seq_buf;
         double *pred_outputs;
@@ -285,7 +399,6 @@ int main(int argc, char *argv[]) {
 
         seq_len = sequence_length;
         num_features = NUM_RAW_FEATURES;
-        start_row = 1;
         norm_count = 0;
 
         /* Load data */
@@ -303,10 +416,10 @@ int main(int argc, char *argv[]) {
             num_raw = agg_count;
         }
 
-        /* Find row by datetime */
+        /* Find row by datetime (nearest match if exact not found) */
         end_row = find_row_by_datetime(raw_data, num_raw, datetime_str);
         if (end_row < 0) {
-            fprintf(stderr, "Error: datetime %s not found in data\n", datetime_str);
+            fprintf(stderr, "Error: no data available\n");
             utils_safe_free(raw_data);
             return 1;
         }

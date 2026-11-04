@@ -65,6 +65,29 @@ int main(void) {
     total++; passed += test_bptt_gradient_check_26();
     printf("\n");
 
+    /* ===== Data I/O tests ===== */
+    printf("--- Data I/O tests ---\n\n");
+    total++; passed += test_load_raw_basic();
+    printf("\n");
+
+    total++; passed += test_load_raw_chronological();
+    printf("\n");
+
+    total++; passed += test_aggregate_h1_identity();
+    printf("\n");
+
+    total++; passed += test_aggregate_h2();
+    printf("\n");
+
+    total++; passed += test_aggregate_h4();
+    printf("\n");
+
+    total++; passed += test_aggregate_h8();
+    printf("\n");
+
+    total++; passed += test_aggregate_double_h2();
+    printf("\n");
+
     /* ===== OHLC-specific tests ===== */
     printf("--- OHLC tests ---\n\n");
     total++; passed += test_training_loop_ohlc();
