@@ -8,7 +8,9 @@
 #define MODE_DIRECTION 1
 
 /* ==================== Feature count ==================== */
-#define NUM_RAW_FEATURES 26
+#define NUM_BASE_FEATURES 13      /* base + technical + temporal features */
+#define NUM_MTF_FEATURES  13      /* multi-timeframe features (H2 aggregation) */
+#define NUM_RAW_FEATURES  (NUM_BASE_FEATURES + NUM_MTF_FEATURES)  /* 26 */
 
 /* ==================== Raw Data Row ==================== */
 typedef struct {

@@ -28,6 +28,13 @@
 #define DET2_W 0.05
 #define DET2_X 0.3
 
+/* Deterministic forward 32x8x26 (full feature count) */
+#define DET3_N 32
+#define DET3_F 26
+#define DET3_T 8
+#define DET3_W 0.02
+#define DET3_X 0.4
+
 /* ==================== Shared helpers ==================== */
 
 LSTMCellState *alloc_cell_states(int seq_len, int n, int combined);
@@ -51,9 +58,15 @@ int test_save_load(void);
 
 int test_deterministic_forward_64(void);
 int test_deterministic_forward_128(void);
+int test_deterministic_forward_26(void);
 
 int test_bptt_gradient_check_64(void);
 int test_bptt_gradient_check_128(void);
+int test_bptt_gradient_check_26(void);
+
+/* 26-feature tests */
+int test_forward_26_features(void);
+int test_backward_26_features(void);
 
 /* OHLC-specific */
 int test_training_loop_ohlc(void);

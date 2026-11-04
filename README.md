@@ -31,7 +31,7 @@ make LSTM_C90
 
 ```bash
 ./test_lstm
-# Ожидаемый результат: Results: 20/20 tests passed
+# Ожидаемый результат: Results: 24/24 tests passed
 ```
 
 ### Формат данных
@@ -52,17 +52,17 @@ CSV-файл в формате экспорта MetaTrader (таб-раздел�
 ### Архитектура
 
 ```
-Вход (11 признаков × 64 шага) → LSTM (128 ячеек) → LINEAR (128→num_outputs) → predict_count свечей
+Вход (26 признаков × 64 шага) → LSTM (128 ячеек) → LINEAR (128→num_outputs) → predict_count свечей
            many-to-many: output на каждом шаге
 ```
 
 - **Стандарт языка:** C90 (без C99-фич)
 - **LSTM ячеек:** 128 (размер hidden state, не зависит от длины последовательности)
-- **Признаков:** 11 (на каждый временной шаг)
+- **Признаков:** 26 (13 базовых + 13 мульти-таймфрейм, на каждый временной шаг)
 - **Временных шагов:** 64 (длина входной последовательности)
 - **Выходов:** `predict_count × 4` (OHLC) или `predict_count` (Direction), на каждый шаг
 - **Архитектура:** many-to-many — output layer срабатывает на каждом шаге
-- **Горизонт прогноза по умолчанию:** 1 свеча (`--ohlcpredictcount 1`), можно изменить до 5+ через CLI
+- **Горизонт прогноза по умолчанию:** 1 свеча (`--output 1`), можно увеличить через CLI
 - **Функция потерь:** MSE (OHLC) или BCE (Direction)
 - **Авторегрессия:** нет (один forward pass → сразу все свечи)
 
@@ -85,14 +85,16 @@ Loss суммируется по всем `seq_len × num_outputs` выхода�
 Один forward pass → берём выходы **последнего шага** (`outputs[(seq_len-1) × num_outputs + o]`) → денормализация → предсказанные значения.
 - **Без авторегрессии:** один forward pass → сразу все свечи
 
-### Признаки (11)
+### Признаки (26)
+
+**13 базовых признаков** (индексы 0–12):
 
 | # | Имя | Описание |
 |---|-----|----------|
 | 0 | `candle_return` | (close - open) / open |
 | 1 | `candle_range` | (high - low) / open |
 | 2 | `close_return` | (close_t - close_{t-1}) / close_{t-1} |
-| 3 | `volume_return` | (vol_t - vol_{t-1}) / vol_{t-1} |
+| 3 | `volume_return` | (vol_t - vol_{t-1}) / vol_{t-1}, обрезка [-10,10] |
 | 4 | `ma_diff` | (MA5 - MA20) / MA20 |
 | 5 | `volatility` | std(close_return, 12 баров) |
 | 6 | `rsi` | RSI(14) / 100, [0,1] |
@@ -100,6 +102,26 @@ Loss суммируется по всем `seq_len × num_outputs` выхода�
 | 8 | `bb_position` | (close - BB_lower) / (BB_upper - BB_lower), BB = MA20 ± 2σ |
 | 9 | `atr_norm` | ATR(14) / close |
 | 10 | `stoch_k` | Stochastic %K(14) / 100, [0,1] |
+| 11 | `hour` | hour_of_day / 23 |
+| 12 | `dow` | day_of_week / 6 |
+
+**13 мульти-таймфрейм признаков** (индексы 13–25): те же 13 признаков, вычисленные на H2-агрегированных данных (каждые 2 H1 свечи → 1 H2 свеча), наложенные на H1 строки.
+
+| # | Имя | Описание |
+|---|-----|----------|
+| 13 | `mtf_candle_return` | candle_return на H2 |
+| 14 | `mtf_candle_range` | candle_range на H2 |
+| 15 | `mtf_close_return` | close_return на H2 |
+| 16 | `mtf_volume_return` | volume_return на H2 |
+| 17 | `mtf_ma_diff` | ma_diff на H2 |
+| 18 | `mtf_volatility` | volatility на H2 |
+| 19 | `mtf_rsi` | rsi на H2 |
+| 20 | `mtf_macd_hist` | macd_hist на H2 |
+| 21 | `mtf_bb_position` | bb_position на H2 |
+| 22 | `mtf_atr_norm` | atr_norm на H2 |
+| 23 | `mtf_stoch_k` | stoch_k на H2 |
+| 24 | `mtf_hour` | hour на H2 |
+| 25 | `mtf_dow` | dow на H2 |
 
 ### Выходы (OHLC режим)
 
@@ -158,13 +180,11 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 | `--epochs` | 100 | Кол-во эпох обучения |
 | `--lr` | 0.005 | Learning rate (SGD) |
 | `--seq` | 64 | Длина входной последовательности (баров) |
-| `--mode` | `ohlc` | Режим: `ohlc` (прогноз OHLC) или `direction` (прогноз направления 0/1) |
-| `--ohlcpredictcount` | 1 | Кол-во OHLC векторов (только для `--mode ohlc`) |
-| `--directioncount` | 1 | Кол-во шагов прогноза направления (только для `--mode direction`) |
+| `--mode` | `ohlc` | Режим: `ohlc`, `direction`, `ohlcpredict`, `directionpredict` |
+| `--output` | 1 | Кол-во выходов (OHLC векторов или шагов направления) |
+| `--datetime` | — | `YYYY.MM.DDThh:mm:ss` — дата-время для прогноза (обязательно для predict-режимов) |
 | `--data` | `../resources/EURUSD_*.csv` | Путь к CSV-файлу |
-| `--model` | `../resources/model_{mode}_predic_count_N.txt` | Путь к файлу модели |
-| `--line` | 0 | Номер строки CSV для прогноза (0 = обучение) |
-| `--real` | 0 | Вывод реальных данных M баров начиная со строки N (с `--line`) |
+| `--model` | `../resources/model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt` | Путь к файлу модели |
 | `--h` | 1 | Агрегация таймфрейма: группировка N свечей H1 в одну (H1=1, H2=2, H4=4, ...) |
 
 **Зашиты в код** (в `lstm.h` / `main.c`):
@@ -182,47 +202,29 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 | Xavier/Glorot init | sqrt(2/(fan_in + fan_out)) | `lstm.c` |
 | Forget gate bias init | 1.0 (Jozefowicz et al., 2015) | `lstm.c` |
 | Train/test split | 80/20 chronological | `data.c` |
-| `NUM_RAW_FEATURES` | 11 | `data.h` |
+| `NUM_RAW_FEATURES` | 26 | `data.h` |
+| `NUM_BASE_FEATURES` | 13 | `data.h` |
+| `NUM_MTF_FEATURES` | 13 | `data.h` |
 
 ### Режимы работы
 
-**1. Обучение** (по умолчанию):
+**1. Обучение** (`--mode ohlc` или `--mode direction`):
 ```bash
-./LSTM_C90
-./LSTM_C90 --cells 64 --epochs 50 --lr 0.001 --seq 32 --ohlcpredictcount 5
-./LSTM_C90 --mode direction --epochs 50 --lr 0.01
-./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --h 4
+./LSTM_C90 --mode ohlc --cells 128 --epochs 100 --lr 0.005 --seq 64 --output 1
+./LSTM_C90 --mode ohlc --cells 64 --epochs 50 --lr 0.001 --seq 32 --output 5
+./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --output 3
+./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --output 3 --h 4
 ```
-Модель сохраняется в `model_{mode}_predic_count_N.txt` (N = predict_count). **Ctrl+C** — корректное сохранение модели.
+Модель сохраняется в `model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt`. **Ctrl+C** — корректное сохранение модели.
 
-**2. Прогноз** (`--line N` без `--real`):
+**2. Прогноз** (`--mode ohlcpredict` или `--mode directionpredict`):
 ```bash
-./LSTM_C90 --line 100000 --ohlcpredictcount 5
-./LSTM_C90 --mode direction --line 100000 --directioncount 5
-./LSTM_C90 --mode direction --line 25000 --directioncount 5 --h 4
+./LSTM_C90 --mode ohlcpredict --datetime 2024.01.15T08:00:00 --output 5
+./LSTM_C90 --mode directionpredict --datetime 2024.01.15T08:00:00 --output 3
+./LSTM_C90 --mode ohlcpredict --datetime 2024.01.15T08:00:00 --output 5 --h 4
+./LSTM_C90 --mode directionpredict --datetime 2024.01.15T08:00:00 --output 3 --h 4
 ```
-Если `predict_count`, `mode` или `--h` не совпадают с моделью — ошибка и выход. Один forward pass → `num_outputs` выходов → денормализация → предсказанные значения. **Без авторегрессии.**
-
-**3. Реальные данные** (`--line N --real M`):
-```bash
-./LSTM_C90 --line 100000 --real 64
-```
-Вывод OHLC для M баров начиная со строки N.
-
-### Скрипты (PowerShell)
-
-| Скрипт | Описание |
-|--------|----------|
-| `scripts/build.ps1` | Сборка основного бинарника через CMake + MinGW. Использует встроенный в CLion CMake — замените путь при необходимости. |
-| `scripts/train.ps1` | Запуск обучения. Параметры: `-Mode` (Quick/Medium/Full/OneEpoch), `-Epochs`, `-DataPercent`. **Внимание:** переопределяет `--lr` на 0.0005 (не 0.005). |
-| `scripts/predict.ps1` | Запуск прогноза. Параметры: `-Line`, `-Count`. **Внимание:** использует флаг `--predict`, которого нет в main.c — замените на `--ohlcpredictcount`. |
-
-```powershell
-./scripts/build.ps1
-./scripts/train.ps1 -Mode Quick      # 10 эпох, 10% данных
-./scripts/train.ps1 -Mode Full       # 100 эпох, 100% данных
-./scripts/predict.ps1 -Line 100000 -Count 5
-```
+Если `predict_count`, `mode`, `seq` или `--h` не совпадают с моделью — ошибка и выход. Один forward pass → `num_outputs` выходов → денормализация → предсказанные значения. Выводятся только строки прогноза в количестве `--output`. **Без авторегрессии.**
 
 ### Формат файла модели
 
@@ -231,11 +233,12 @@ Threshold: `pred > 0.5` → вверх (1), иначе → вниз (0).
 ```
 # LSTM Model - Text Format
 # num_cells: 128
-# num_features: 11
+# num_features: 26
 # num_outputs: 4
 # predict_count: 1
 # mode: ohlc
 # output_activation: 0
+# seq_len: 64
 # epochs_trained: 100
 # best_train_mse: ...
 # best_test_direction_accuracy: ...
@@ -292,6 +295,7 @@ bias_output_layer: b0 b1 ... b_num_out
 │   ├── test_utils.h/.c, test_main.c       # Общие хелперы, runner
 │   ├── test_forward.c, test_backward.c, test_update.c   # Общие LSTM тесты
 │   ├── test_model_io.c, test_deterministic.c, test_gradient.c
+│   ├── test_features_26.c                 # Тесты с 26 признаками
 │   ├── ohlc/
 │   │   ├── test_training_ohlc.c     # Training loop (OHLC labels)
 │   │   ├── test_data_ohlc.c        # Volume clip & label norm
@@ -301,11 +305,9 @@ bias_output_layer: b0 b1 ... b_num_out
 │       ├── test_training_direction.c # Training loop (sigmoid+BCE)
 │       ├── test_sigmoid_gradient.c  # Gradient check (sigmoid+BCE)
 │       └── test_deterministic_direction.c # Forward+BPTT vs scalar (sigmoid+BCE)
-├── resources/
-│   ├── EURUSD_H1_*.csv
-│   └── model_{mode}_predic_count_N.txt
-└── scripts/
-    ├── build.ps1, train.ps1, predict.ps1
+└── resources/
+    ├── EURUSD_H1_*.csv
+    └── model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt
 ```
 
 ### API — описание всех функций
@@ -344,7 +346,7 @@ Output layer: `weight_output_layer` [num_outputs × n], `bias_output_layer` [num
 | Функция | Описание |
 |---------|----------|
 | `int data_load_raw(const char *filepath, DataRow **out_rows, int *out_count)` | Загрузка CSV (формат MetaTrader, таб-разделитель). |
-| `double **data_compute_raw_features(...)` | Feature engineering: 11 признаков на бар (6 базовых + 5 технических индикаторов). |
+| `double **data_compute_raw_features(...)` | Feature engineering: 26 признаков на бар (13 базовых + 13 мульти-таймфрейм). |
 | `Dataset *data_alloc_dataset(...)` | Выделение памяти, заполнение features. |
 | `void data_normalize_features(Dataset *ds)` | Нормализация фичей в [0,1]. |
 | `DatasetSplit data_split_train_test(Dataset *ds, double train_ratio)` | Хронологическое разделение (shallow copy). |
@@ -360,7 +362,7 @@ Output layer: `weight_output_layer` [num_outputs × n], `bias_output_layer` [num
 
 ### Тесты
 
-20 тестов, разбиты по файлам, все проходят:
+24 теста, разбиты по файлам, все проходят:
 
 **Общие LSTM тесты (13):**
 
@@ -380,22 +382,31 @@ Output layer: `weight_output_layer` [num_outputs × n], `bias_output_layer` [num
 | 12 | `test_deterministic.c` | `test_deterministic_forward_128` | 128 cells × 256 steps: H, C совпадают с аналитикой |
 | 13 | `test_gradient.c` | `test_bptt_gradient_check_128` | 128 cells × 4 steps: 10 gradient checks |
 
+**26-признаковые тесты (4):**
+
+| # | Файл | Тест | Описание |
+|---|------|------|----------|
+| 14 | `test_features_26.c` | `test_forward_26_features` | Forward pass с 26 признаками без NaN/Inf |
+| 15 | `test_features_26.c` | `test_backward_26_features` | BPTT с 26 признаками, градиенты ненулевые |
+| 16 | `test_deterministic.c` | `test_deterministic_forward_26` | 32 cells × 8 steps × 26 features: H, C совпадают с аналитикой |
+| 17 | `test_gradient.c` | `test_bptt_gradient_check_26` | 32 cells × 8 steps × 26 features: 8 gradient checks |
+
 **OHLC тесты (3):**
 
 | # | Файл | Тест | Описание |
 |---|------|------|----------|
-| 14 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE уменьшается (OHLC labels, many-to-many) |
-| 15 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels в [-1,1] |
-| 16 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 шага, linear) |
+| 18 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE уменьшается (OHLC labels, many-to-many) |
+| 19 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels в [-1,1] |
+| 20 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 шага, linear) |
 
 **Direction тесты (4):**
 
 | # | Файл | Тест | Описание |
 |---|------|------|----------|
-| 17 | `direction/test_data_direction.c` | `test_direction_labels` | Все labels ровно 0 или 1 |
-| 18 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE уменьшается (sigmoid output, labels 0/1) |
-| 19 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
-| 20 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 шага, sigmoid+BCE) |
+| 21 | `direction/test_data_direction.c` | `test_direction_labels` | Все labels ровно 0 или 1 |
+| 22 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE уменьшается (sigmoid output, labels 0/1) |
+| 23 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
+| 24 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 шага, sigmoid+BCE) |
 
 
 ## 🇬🇧
@@ -427,7 +438,7 @@ make LSTM_C90
 
 ```bash
 ./test_lstm
-# Expected output: Results: 20/20 tests passed
+# Expected output: Results: 24/24 tests passed
 ```
 
 ### Data Format
@@ -448,17 +459,17 @@ CSV file in MetaTrader export format (tab-delimited, double-quoted fields):
 ### Architecture
 
 ```
-Input (11 features × 64 steps) → LSTM (128 cells) → LINEAR (128→num_outputs) → predict_count candles
+Input (26 features × 64 steps) → LSTM (128 cells) → LINEAR (128→num_outputs) → predict_count candles
            many-to-many: output at every step
 ```
 
 - **Language standard:** C90 (no C99 features)
 - **LSTM cells:** 128 (hidden state size, independent of sequence length)
-- **Features:** 11 (per time step)
+- **Features:** 26 (13 base + 13 multi-timeframe, per time step)
 - **Time steps:** 64 (input sequence length)
 - **Outputs:** `predict_count × 4` (OHLC) or `predict_count` (Direction), per step
 - **Architecture:** many-to-many — output layer fires at every step
-- **Default prediction horizon:** 1 candle (`--ohlcpredictcount 1`), can be increased via CLI
+- **Default prediction horizon:** 1 candle (`--output 1`), can be increased via CLI
 - **Loss function:** MSE (OHLC) or BCE (Direction)
 - **Autoregression:** none (single forward pass → all candles directly)
 
@@ -481,14 +492,16 @@ Loss sums over all `seq_len × num_outputs` outputs, giving more gradient signal
 Single forward pass → take outputs from the **last step** (`outputs[(seq_len-1) × num_outputs + o]`) → denormalize → predicted values.
 - **No autoregression:** single forward pass → all candles directly
 
-### Features (11)
+### Features (26)
+
+**13 base features** (indices 0–12):
 
 | # | Name | Description |
 |---|------|-------------|
 | 0 | `candle_return` | (close - open) / open |
 | 1 | `candle_range` | (high - low) / open |
 | 2 | `close_return` | (close_t - close_{t-1}) / close_{t-1} |
-| 3 | `volume_return` | (vol_t - vol_{t-1}) / vol_{t-1} |
+| 3 | `volume_return` | (vol_t - vol_{t-1}) / vol_{t-1}, clipped [-10,10] |
 | 4 | `ma_diff` | (MA5 - MA20) / MA20 |
 | 5 | `volatility` | std(close_return, 12 bars) |
 | 6 | `rsi` | RSI(14) / 100, [0,1] |
@@ -496,6 +509,26 @@ Single forward pass → take outputs from the **last step** (`outputs[(seq_len-1
 | 8 | `bb_position` | (close - BB_lower) / (BB_upper - BB_lower), BB = MA20 ± 2σ |
 | 9 | `atr_norm` | ATR(14) / close |
 | 10 | `stoch_k` | Stochastic %K(14) / 100, [0,1] |
+| 11 | `hour` | hour_of_day / 23 |
+| 12 | `dow` | day_of_week / 6 |
+
+**13 multi-timeframe features** (indices 13–25): same 13 features computed on H2-aggregated data (every 2 H1 candles → 1 H2 candle), overlaid onto H1 rows.
+
+| # | Name | Description |
+|---|------|-------------|
+| 13 | `mtf_candle_return` | candle_return on H2 |
+| 14 | `mtf_candle_range` | candle_range on H2 |
+| 15 | `mtf_close_return` | close_return on H2 |
+| 16 | `mtf_volume_return` | volume_return on H2 |
+| 17 | `mtf_ma_diff` | ma_diff on H2 |
+| 18 | `mtf_volatility` | volatility on H2 |
+| 19 | `mtf_rsi` | rsi on H2 |
+| 20 | `mtf_macd_hist` | macd_hist on H2 |
+| 21 | `mtf_bb_position` | bb_position on H2 |
+| 22 | `mtf_atr_norm` | atr_norm on H2 |
+| 23 | `mtf_stoch_k` | stoch_k on H2 |
+| 24 | `mtf_hour` | hour on H2 |
+| 25 | `mtf_dow` | dow on H2 |
 
 ### Outputs (OHLC mode)
 
@@ -554,13 +587,11 @@ Incomplete last group is dropped.
 | `--epochs` | 100 | Training epochs |
 | `--lr` | 0.005 | Learning rate (SGD) |
 | `--seq` | 64 | Input sequence length (bars) |
-| `--mode` | `ohlc` | Mode: `ohlc` (OHLC forecast) or `direction` (0/1 direction forecast) |
-| `--ohlcpredictcount` | 1 | Number of OHLC vectors (only for `--mode ohlc`) |
-| `--directioncount` | 1 | Number of direction steps (only for `--mode direction`) |
+| `--mode` | `ohlc` | Mode: `ohlc`, `direction`, `ohlcpredict`, `directionpredict` |
+| `--output` | 1 | Number of outputs (OHLC vectors or direction steps) |
+| `--datetime` | — | `YYYY.MM.DDThh:mm:ss` — datetime for prediction (required for predict modes) |
 | `--data` | `../resources/EURUSD_*.csv` | Path to CSV file |
-| `--model` | `../resources/model_{mode}_predic_count_N.txt` | Path to model file |
-| `--line` | 0 | CSV row number for prediction (0 = training mode) |
-| `--real` | 0 | Output real data for M bars starting at row N (with `--line`) |
+| `--model` | `../resources/model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt` | Path to model file |
 | `--h` | 1 | Timeframe aggregation: group N H1 candles into one (H1=1, H2=2, H4=4, ...) |
 
 **Hardcoded** (in `lstm.h` / `main.c`):
@@ -578,47 +609,29 @@ Incomplete last group is dropped.
 | Xavier/Glorot init | sqrt(2/(fan_in + fan_out)) | `lstm.c` |
 | Forget gate bias init | 1.0 (Jozefowicz et al., 2015) | `lstm.c` |
 | Train/test split | 80/20 chronological | `data.c` |
-| `NUM_RAW_FEATURES` | 11 | `data.h` |
+| `NUM_RAW_FEATURES` | 26 | `data.h` |
+| `NUM_BASE_FEATURES` | 13 | `data.h` |
+| `NUM_MTF_FEATURES` | 13 | `data.h` |
 
 ### Modes
 
-**1. Training** (default):
+**1. Training** (`--mode ohlc` or `--mode direction`):
 ```bash
-./LSTM_C90
-./LSTM_C90 --cells 64 --epochs 50 --lr 0.001 --seq 32 --ohlcpredictcount 5
-./LSTM_C90 --mode direction --epochs 50 --lr 0.01
-./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --h 4
+./LSTM_C90 --mode ohlc --cells 128 --epochs 100 --lr 0.005 --seq 64 --output 1
+./LSTM_C90 --mode ohlc --cells 64 --epochs 50 --lr 0.001 --seq 32 --output 5
+./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --output 3
+./LSTM_C90 --mode direction --epochs 50 --lr 0.01 --output 3 --h 4
 ```
-Model saved to `model_{mode}_predic_count_N.txt` (N = predict_count). **Ctrl+C** — graceful model save.
+Model saved to `model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt`. **Ctrl+C** — graceful model save.
 
-**2. Prediction** (`--line N` without `--real`):
+**2. Prediction** (`--mode ohlcpredict` or `--mode directionpredict`):
 ```bash
-./LSTM_C90 --line 100000 --ohlcpredictcount 5
-./LSTM_C90 --mode direction --line 100000 --directioncount 5
-./LSTM_C90 --mode direction --line 25000 --directioncount 5 --h 4
+./LSTM_C90 --mode ohlcpredict --datetime 2024.01.15T08:00:00 --output 5
+./LSTM_C90 --mode directionpredict --datetime 2024.01.15T08:00:00 --output 3
+./LSTM_C90 --mode ohlcpredict --datetime 2024.01.15T08:00:00 --output 5 --h 4
+./LSTM_C90 --mode directionpredict --datetime 2024.01.15T08:00:00 --output 3 --h 4
 ```
-If `predict_count`, `mode` or `--h` doesn't match the model — error and exit. Single forward pass → `num_outputs` outputs → denormalize → predicted values. **No autoregression.**
-
-**3. Real data** (`--line N --real M`):
-```bash
-./LSTM_C90 --line 100000 --real 64
-```
-Output OHLC for M bars starting at row N.
-
-### Scripts (PowerShell)
-
-| Script | Description |
-|--------|-------------|
-| `scripts/build.ps1` | Builds main binary via CMake + MinGW. Uses CLion-bundled CMake — replace path if needed. |
-| `scripts/train.ps1` | Runs training. Params: `-Mode` (Quick/Medium/Full/OneEpoch), `-Epochs`, `-DataPercent`. **Note:** overrides `--lr` to 0.0005 (not 0.005). |
-| `scripts/predict.ps1` | Runs prediction. Params: `-Line`, `-Count`. **Note:** uses `--predict` flag which doesn't exist in main.c — replace with `--ohlcpredictcount`. |
-
-```powershell
-./scripts/build.ps1
-./scripts/train.ps1 -Mode Quick      # 10 epochs, 10% data
-./scripts/train.ps1 -Mode Full       # 100 epochs, 100% data
-./scripts/predict.ps1 -Line 100000 -Count 5
-```
+If `predict_count`, `mode`, `seq` or `--h` doesn't match the model — error and exit. Single forward pass → `num_outputs` outputs → denormalize → predicted values. Only prediction rows are output, in the quantity specified by `--output`. **No autoregression.**
 
 ### Model File Format
 
@@ -627,11 +640,12 @@ Human-readable text format:
 ```
 # LSTM Model - Text Format
 # num_cells: 128
-# num_features: 11
+# num_features: 26
 # num_outputs: 4
 # predict_count: 1
 # mode: ohlc
 # output_activation: 0
+# seq_len: 64
 # epochs_trained: 100
 # best_train_mse: ...
 # best_test_direction_accuracy: ...
@@ -680,6 +694,7 @@ Weights are saved with full double precision (`%.17g`). `output_activation`: 0=l
 │   ├── test_utils.h/.c, test_main.c       # Shared helpers, runner
 │   ├── test_forward.c, test_backward.c, test_update.c   # Common LSTM tests
 │   ├── test_model_io.c, test_deterministic.c, test_gradient.c
+│   ├── test_features_26.c                 # 26-feature tests
 │   ├── ohlc/
 │   │   ├── test_training_ohlc.c, test_data_ohlc.c
 │   │   └── test_deterministic_ohlc.c
@@ -687,16 +702,14 @@ Weights are saved with full double precision (`%.17g`). `output_activation`: 0=l
 │       ├── test_data_direction.c, test_training_direction.c
 │       ├── test_sigmoid_gradient.c
 │       └── test_deterministic_direction.c
-├── resources/
-│   ├── EURUSD_H1_*.csv
-│   └── model_{mode}_predic_count_N.txt
-└── scripts/
-    ├── build.ps1, train.ps1, predict.ps1
+└── resources/
+    ├── EURUSD_H1_*.csv
+    └── model_{pair}_{mode}_cells_{N}_seq_{N}_count_{N}.txt
 ```
 
 ### Tests
 
-20 tests, split across files, all passing:
+24 tests, split across files, all passing:
 
 **Common LSTM tests (13):**
 
@@ -716,19 +729,28 @@ Weights are saved with full double precision (`%.17g`). `output_activation`: 0=l
 | 12 | `test_deterministic.c` | `test_deterministic_forward_128` | 128 cells × 256 steps: H, C match analytical |
 | 13 | `test_gradient.c` | `test_bptt_gradient_check_128` | 128 cells × 4 steps: 10 gradient checks |
 
+**26-feature tests (4):**
+
+| # | File | Test | Description |
+|---|------|------|-------------|
+| 14 | `test_features_26.c` | `test_forward_26_features` | Forward pass with 26 features, no NaN/Inf |
+| 15 | `test_features_26.c` | `test_backward_26_features` | BPTT with 26 features, gradients non-zero |
+| 16 | `test_deterministic.c` | `test_deterministic_forward_26` | 32 cells × 8 steps × 26 features: H, C match analytical |
+| 17 | `test_gradient.c` | `test_bptt_gradient_check_26` | 32 cells × 8 steps × 26 features: 8 gradient checks |
+
 **OHLC tests (3):**
 
 | # | File | Test | Description |
 |---|------|------|-------------|
-| 14 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE decreases (OHLC labels, many-to-many) |
-| 15 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels in [-1,1] |
-| 16 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 steps, linear) |
+| 18 | `ohlc/test_training_ohlc.c` | `test_training_loop_ohlc` | MSE decreases (OHLC labels, many-to-many) |
+| 19 | `ohlc/test_data_ohlc.c` | `test_volume_clip_and_label_norm_ohlc` | Volume clipping + labels in [-1,1] |
+| 20 | `ohlc/test_deterministic_ohlc.c` | `test_deterministic_ohlc` | Forward+BPTT vs scalar (1 cell, 2 steps, linear) |
 
 **Direction tests (4):**
 
 | # | File | Test | Description |
 |---|------|------|-------------|
-| 17 | `direction/test_data_direction.c` | `test_direction_labels` | All labels are exactly 0 or 1 |
-| 18 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE decreases (sigmoid output, labels 0/1) |
-| 19 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
-| 20 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 steps, sigmoid+BCE) |
+| 21 | `direction/test_data_direction.c` | `test_direction_labels` | All labels are exactly 0 or 1 |
+| 22 | `direction/test_training_direction.c` | `test_training_loop_direction` | BCE decreases (sigmoid output, labels 0/1) |
+| 23 | `direction/test_sigmoid_gradient.c` | `test_sigmoid_gradient_check` | 6 gradient checks (sigmoid+BCE), max rel_err ~3e-7 |
+| 24 | `direction/test_deterministic_direction.c` | `test_deterministic_direction` | Forward+BPTT vs scalar (1 cell, 2 steps, sigmoid+BCE) |

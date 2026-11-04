@@ -39,6 +39,7 @@ set(TEST_SOURCES
     tests/test_model_io.c
     tests/test_deterministic.c
     tests/test_gradient.c
+    tests/test_features_26.c
     tests/ohlc/test_training_ohlc.c
     tests/ohlc/test_data_ohlc.c
     tests/ohlc/test_deterministic_ohlc.c

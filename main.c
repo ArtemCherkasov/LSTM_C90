@@ -59,6 +59,52 @@ static void shuffle_indices(int *indices, int count, unsigned int seed) {
 #define LOSS_SCALE 1000
 #define MODEL_PATH "../resources/model.txt"
 
+/* ==================== Currency pair extraction ==================== */
+
+static void extract_currency_pair(const char *data_path, char *pair_out) {
+    const char *base;
+    int i;
+    base = data_path;
+    for (i = 0; data_path[i]; i++) {
+        if (data_path[i] == '/' || data_path[i] == '\\')
+            base = data_path + i + 1;
+    }
+    for (i = 0; base[i] && base[i] != '_' && i < 7; i++)
+        pair_out[i] = base[i];
+    pair_out[i] = 0;
+}
+
+/* ==================== DateTime to row search ==================== */
+
+static int find_row_by_datetime(DataRow *raw, int num_raw, const char *datetime_str) {
+    char date_part[16];
+    char time_part[16];
+    int i;
+    const char *t_pos;
+
+    t_pos = strchr(datetime_str, 'T');
+    if (!t_pos) return -1;
+
+    {
+        int dlen = (int)(t_pos - datetime_str);
+        if (dlen >= 16) dlen = 15;
+        memcpy(date_part, datetime_str, (size_t)dlen);
+        date_part[dlen] = 0;
+    }
+    {
+        int tlen = (int)strlen(t_pos + 1);
+        if (tlen >= 16) tlen = 15;
+        memcpy(time_part, t_pos + 1, (size_t)tlen);
+        time_part[tlen] = 0;
+    }
+
+    for (i = 0; i < num_raw; i++) {
+        if (strcmp(raw[i].date, date_part) == 0 && strcmp(raw[i].time_, time_part) == 0)
+            return i;
+    }
+    return -1;
+}
+
 int main(int argc, char *argv[]) {
     int num_lstm_cells, num_epochs, sequence_length, batch_size;
     double learning_rate, momentum;
@@ -89,9 +135,11 @@ int main(int argc, char *argv[]) {
     double test_acc;
     int demo_start;
     int d;
-    int raw_line = 0;
-    int real_mode = 0;
-    int real_count = 0;
+    int output_count;
+    int is_prediction;
+    char datetime_str[32];
+    int has_datetime;
+    char currency_pair[8];
     double batch_loss_sum;
     double batch_loss_avg;
     int bar_width;
@@ -99,8 +147,6 @@ int main(int argc, char *argv[]) {
     double *preds;
     int o;
     int kk;
-    int ohlc_predict_count;
-    int direction_predict_count;
     int predict_count;
     int num_outputs;
     char model_path_buf[256];
@@ -117,13 +163,13 @@ int main(int argc, char *argv[]) {
     batch_size = DEFAULT_BATCH_SIZE;
     momentum = DEFAULT_MOMENTUM;
     seed = DEFAULT_SEED;
-    raw_line = 0;
-    real_mode = 0;
-    real_count = 0;
+    output_count = 1;
+    is_prediction = 0;
+    has_datetime = 0;
+    datetime_str[0] = 0;
     data_path = "../resources/EURUSD_H1_200906120000_202509251100.csv";
     model_path = NULL;
     predict_count = DEFAULT_OHLC_PREDICT_COUNT;
-    direction_predict_count = DEFAULT_OHLC_PREDICT_COUNT;
     model_path_overridden = 0;
     h_period = 1;
     mode_str = "ohlc";
@@ -146,14 +192,7 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, signal_handler);
 
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--line") == 0 && i + 1 < argc) {
-            raw_line = atoi(argv[i + 1]);
-            i++;
-        } else if (strcmp(argv[i], "--real") == 0 && i + 1 < argc) {
-            real_mode = 1;
-            real_count = atoi(argv[i + 1]);
-            i++;
-        } else if (strcmp(argv[i], "--cells") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--cells") == 0 && i + 1 < argc) {
             num_lstm_cells = atoi(argv[i + 1]);
             i++;
         } else if (strcmp(argv[i], "--epochs") == 0 && i + 1 < argc) {
@@ -165,11 +204,13 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--seq") == 0 && i + 1 < argc) {
             sequence_length = atoi(argv[i + 1]);
             i++;
-        } else if (strcmp(argv[i], "--ohlcpredictcount") == 0 && i + 1 < argc) {
-            ohlc_predict_count = atoi(argv[i + 1]);
+        } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
+            output_count = atoi(argv[i + 1]);
             i++;
-        } else if (strcmp(argv[i], "--directioncount") == 0 && i + 1 < argc) {
-            direction_predict_count = atoi(argv[i + 1]);
+        } else if (strcmp(argv[i], "--datetime") == 0 && i + 1 < argc) {
+            strncpy(datetime_str, argv[i + 1], sizeof(datetime_str) - 1);
+            datetime_str[sizeof(datetime_str) - 1] = 0;
+            has_datetime = 1;
             i++;
         } else if (strcmp(argv[i], "--h") == 0 && i + 1 < argc) {
             h_period = atoi(argv[i + 1]);
@@ -177,8 +218,21 @@ int main(int argc, char *argv[]) {
             i++;
         } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode_str = argv[i + 1];
-            if (strcmp(mode_str, "direction") == 0) mode = MODE_DIRECTION;
-            else mode = MODE_OHLC;
+            if (strcmp(mode_str, "direction") == 0) {
+                mode = MODE_DIRECTION;
+                is_prediction = 0;
+            } else if (strcmp(mode_str, "directionpredict") == 0) {
+                mode = MODE_DIRECTION;
+                mode_str = "direction";
+                is_prediction = 1;
+            } else if (strcmp(mode_str, "ohlcpredict") == 0) {
+                mode = MODE_OHLC;
+                mode_str = "ohlc";
+                is_prediction = 1;
+            } else {
+                mode = MODE_OHLC;
+                is_prediction = 0;
+            }
             i++;
         } else if (strcmp(argv[i], "--data") == 0 && i + 1 < argc) {
             data_path = argv[i + 1];
@@ -191,60 +245,28 @@ int main(int argc, char *argv[]) {
     }
 
     /* Compute derived values based on mode */
+    predict_count = output_count;
     if (mode == MODE_OHLC) {
-        predict_count = ohlc_predict_count;
-        num_outputs = ohlc_predict_count * OUTPUTS_PER_CANDLE;
+        num_outputs = predict_count * OUTPUTS_PER_CANDLE;
     } else {
-        predict_count = direction_predict_count;
-        num_outputs = direction_predict_count;
+        num_outputs = predict_count;
     }
+
+    /* Extract currency pair from data filename */
+    extract_currency_pair(data_path, currency_pair);
 
     /* Build default model path if not overridden */
     if (!model_path_overridden) {
         snprintf(model_path_buf, sizeof(model_path_buf),
-                 "../resources/model_%s_predic_count_%d.txt", mode_str, predict_count);
+                 "../resources/model_%s_%s_cells_%d_seq_%d_count_%d.txt",
+                 currency_pair, mode_str, num_lstm_cells, sequence_length, predict_count);
         model_path = model_path_buf;
     }
 
-    /* ==================== REAL DATA MODE ==================== */
-    if (real_mode && raw_line > 0 && real_count > 0) {
-        int k;
-        int end_row;
-
-        /* Load data */
-        raw_data = NULL;
-        num_raw = 0;
-        if (data_load_raw(data_path, &raw_data, &num_raw) != 0) {
-            fprintf(stderr, "Failed to load data.\n");
-            return 1;
-        }
-        if (h_period > 1) {
-            DataRow *agg; int agg_count;
-            data_aggregate_raw(raw_data, num_raw, h_period, &agg, &agg_count);
-            utils_safe_free(raw_data);
-            raw_data = agg;
-            num_raw = agg_count;
-        }
-
-        end_row = raw_line + real_count - 1;
-        if (end_row > num_raw - 1) end_row = num_raw - 1;
-
-        for (k = raw_line; k <= end_row; k++) {
-            printf("%.5f %.5f %.5f %.5f\n",
-                   raw_data[k].open,
-                   raw_data[k].high,
-                   raw_data[k].low,
-                   raw_data[k].close);
-        }
-        utils_safe_free(raw_data);
-        return 0;
-    }
-
-    /* ==================== PREDICT MODE (--line without --real) ==================== */
-    if (raw_line > 0 && !real_mode) {
+    /* ==================== PREDICTION MODE ==================== */
+    if (is_prediction) {
         int seq_len, num_features, start_row, end_row;
-        int fi, s, ref_steps, norm_count;
-        double cr, rng_val, cret, vol_ret, ma_diff, vol;
+        int fi, s, norm_count;
         double *seq_buf;
         double *pred_outputs;
         double *feat_min_arr;
@@ -256,11 +278,14 @@ int main(int argc, char *argv[]) {
         char mline[8192];
         double ref_close;
 
+        if (!has_datetime) {
+            fprintf(stderr, "Error: --datetime is required for prediction modes\n");
+            return 1;
+        }
+
         seq_len = sequence_length;
         num_features = NUM_RAW_FEATURES;
         start_row = 1;
-        end_row = raw_line;
-        ref_steps = 64;
         norm_count = 0;
 
         /* Load data */
@@ -276,6 +301,14 @@ int main(int argc, char *argv[]) {
             utils_safe_free(raw_data);
             raw_data = agg;
             num_raw = agg_count;
+        }
+
+        /* Find row by datetime */
+        end_row = find_row_by_datetime(raw_data, num_raw, datetime_str);
+        if (end_row < 0) {
+            fprintf(stderr, "Error: datetime %s not found in data\n", datetime_str);
+            utils_safe_free(raw_data);
+            return 1;
         }
 
         /* Validate predict_count against model file */
@@ -321,6 +354,28 @@ int main(int argc, char *argv[]) {
             }
             if (model_mode_str[0] != 0 && strcmp(model_mode_str, mode_str) != 0) {
                 fprintf(stderr, "Error: --mode %s does not match model's mode %s\n", mode_str, model_mode_str);
+                utils_safe_free(raw_data);
+                return 1;
+            }
+        }
+
+        /* Validate seq_len against model file */
+        {
+            FILE *mf = fopen(model_path, "r");
+            int model_seq_len = -1;
+            char vline3[512];
+            if (mf) {
+                while (fgets(vline3, sizeof(vline3), mf)) {
+                    utils_trim(vline3);
+                    if (strncmp(vline3, "# seq_len:", strlen("# seq_len:")) == 0) {
+                        model_seq_len = atoi(vline3 + strlen("# seq_len:"));
+                        break;
+                    }
+                }
+                fclose(mf);
+            }
+            if (model_seq_len >= 0 && model_seq_len != seq_len) {
+                fprintf(stderr, "Error: --seq %d does not match model's seq_len %d\n", seq_len, model_seq_len);
                 utils_safe_free(raw_data);
                 return 1;
             }
@@ -374,9 +429,6 @@ int main(int argc, char *argv[]) {
                 fclose(mf);
             }
         }
-
-        end_row = raw_line;
-        if (end_row > num_raw - 1) end_row = num_raw - 1;
 
         if (end_row < seq_len) {
             fprintf(stderr, "Error: Need at least %d rows for sequence, have %d\n",
@@ -432,27 +484,13 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* Single forward pass — no autoregression */
+        /* Single forward pass */
         lstm_predict(pred_network, seq_buf, seq_len, pred_outputs);
 
         /* Reference close for denormalization */
         ref_close = raw_data[end_row].close;
 
-        /* Output reference candles (OHLC mode only) */
-        if (mode == MODE_OHLC) {
-            printf("\n  === Full Output: %d reference + %d prediction ===\n", ref_steps, predict_count);
-            {
-                int ref_start = end_row - ref_steps + 1;
-                if (ref_start < 0) ref_start = 0;
-                for (kk = ref_start; kk <= end_row; kk++) {
-                    if (kk < 0 || kk >= num_raw) continue;
-                    printf("REF [%03d] %.5f %.5f %.5f %.5f\n",
-                           kk - ref_start + 1, raw_data[kk].open, raw_data[kk].high,
-                           raw_data[kk].low, raw_data[kk].close);
-                }
-            }
-        }
-
+        /* Output only prediction results */
         if (mode == MODE_OHLC) {
             predict_ohlc(pred_outputs, num_outputs, seq_len,
                          lbl_min_arr, lbl_max_arr, ref_close, predict_count);

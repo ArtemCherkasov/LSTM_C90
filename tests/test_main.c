@@ -51,6 +51,20 @@ int main(void) {
     total++; passed += test_bptt_gradient_check_128();
     printf("\n");
 
+    /* ===== 26-feature tests ===== */
+    printf("--- 26-feature tests ---\n\n");
+    total++; passed += test_forward_26_features();
+    printf("\n");
+
+    total++; passed += test_backward_26_features();
+    printf("\n");
+
+    total++; passed += test_deterministic_forward_26();
+    printf("\n");
+
+    total++; passed += test_bptt_gradient_check_26();
+    printf("\n");
+
     /* ===== OHLC-specific tests ===== */
     printf("--- OHLC tests ---\n\n");
     total++; passed += test_training_loop_ohlc();

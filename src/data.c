@@ -319,7 +319,7 @@ double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
     }
 
     /* Multi-timeframe features: aggregate raw by 2, compute 13 base features, overlay */
-    if (num_features > 13) {
+    if (num_features > NUM_BASE_FEATURES) {
         DataRow *mtf_raw; int mtf_count;
         double **mtf_features;
         double *mtf_min, *mtf_max;
@@ -327,24 +327,24 @@ double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
         int mtf_i;
 
         data_aggregate_raw(raw, num_raw, 2, &mtf_raw, &mtf_count);
-        mtf_min = (double *)calloc(13, sizeof(double));
-        mtf_max = (double *)calloc(13, sizeof(double));
-        mtf_names = (char **)calloc(13, sizeof(char *));
-        mtf_features = data_compute_raw_features(mtf_raw, mtf_count, 13,
+        mtf_min = (double *)calloc(NUM_BASE_FEATURES, sizeof(double));
+        mtf_max = (double *)calloc(NUM_BASE_FEATURES, sizeof(double));
+        mtf_names = (char **)calloc(NUM_BASE_FEATURES, sizeof(char *));
+        mtf_features = data_compute_raw_features(mtf_raw, mtf_count, NUM_BASE_FEATURES,
                                                    mtf_min, mtf_max, mtf_names);
 
         for (i = 0; i < num_raw; i++) {
             int mi = i / 2;
             if (mi >= mtf_count) mi = mtf_count - 1;
-            for (j = 0; j < 13; j++) {
-                raw_features[i][13 + j] = mtf_features[mi][j];
-                if (mtf_features[mi][j] < feat_min[13 + j]) feat_min[13 + j] = mtf_features[mi][j];
-                if (mtf_features[mi][j] > feat_max[13 + j]) feat_max[13 + j] = mtf_features[mi][j];
+            for (j = 0; j < NUM_BASE_FEATURES; j++) {
+                raw_features[i][NUM_BASE_FEATURES + j] = mtf_features[mi][j];
+                if (mtf_features[mi][j] < feat_min[NUM_BASE_FEATURES + j]) feat_min[NUM_BASE_FEATURES + j] = mtf_features[mi][j];
+                if (mtf_features[mi][j] > feat_max[NUM_BASE_FEATURES + j]) feat_max[NUM_BASE_FEATURES + j] = mtf_features[mi][j];
             }
         }
 
         data_free_raw_features(mtf_features, mtf_count);
-        for (mtf_i = 0; mtf_i < 13; mtf_i++) free(mtf_names[mtf_i]);
+        for (mtf_i = 0; mtf_i < NUM_BASE_FEATURES; mtf_i++) free(mtf_names[mtf_i]);
         free(mtf_names);
         free(mtf_min);
         free(mtf_max);
