@@ -5,7 +5,7 @@
 #include <math.h>
 
 /* Path to test CSV — relative to build directory */
-#define TEST_CSV "../resources/EURUSD_H1_200906120000_202509251100.csv"
+#define TEST_CSV "../resources/EURUSD_H1_201001040000_202611022100.csv"
 
 /* T+1e-6 for floating-point comparisons */
 #define DBL_TOL 1e-6
