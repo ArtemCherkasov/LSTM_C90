@@ -349,3 +349,305 @@ int test_aggregate_double_h2(void) {
     }
     return 0;
 }
+
+/* ==================== Test: data_intersect_raw full overlap ==================== */
+
+int test_intersect_raw_full_overlap(void) {
+    DataRow pri[5], sec[5];
+    DataRow *out_pri, *out_sec;
+    int out_n;
+    int i;
+
+    printf("[TEST] data_intersect_raw: full overlap...");
+    fflush(stdout);
+
+    for (i = 0; i < 5; i++) {
+        snprintf(pri[i].date, 16, "2024.01.%02d", i + 1);
+        snprintf(pri[i].time_, 16, "00:00");
+        pri[i].open = 1.0 + i;
+        sec[i] = pri[i];
+        sec[i].open = 2.0 + i;
+    }
+
+    data_intersect_raw(pri, 5, sec, 5, &out_pri, &out_sec, &out_n);
+
+    if (out_n != 5) {
+        printf("\n  FAIL: out_n=%d, expected 5\n", out_n);
+        utils_safe_free(out_pri);
+        utils_safe_free(out_sec);
+        return 0;
+    }
+
+    for (i = 0; i < 5; i++) {
+        if (strcmp(out_pri[i].date, pri[i].date) != 0 ||
+            fabs(out_pri[i].open - pri[i].open) > DBL_TOL ||
+            fabs(out_sec[i].open - sec[i].open) > DBL_TOL) {
+            printf("\n  FAIL: row %d mismatch\n", i);
+            utils_safe_free(out_pri);
+            utils_safe_free(out_sec);
+            return 0;
+        }
+    }
+
+    printf("\n  PASS: full overlap, all 5 rows aligned\n");
+    utils_safe_free(out_pri);
+    utils_safe_free(out_sec);
+    return 1;
+}
+
+/* ==================== Test: data_intersect_raw partial ==================== */
+
+int test_intersect_raw_partial(void) {
+    DataRow pri[5], sec[5];
+    DataRow *out_pri, *out_sec;
+    int out_n;
+    int i;
+
+    printf("[TEST] data_intersect_raw: partial overlap...");
+    fflush(stdout);
+
+    for (i = 0; i < 5; i++) {
+        snprintf(pri[i].date, 16, "2024.01.%02d", i + 1);
+        snprintf(pri[i].time_, 16, "00:00");
+        pri[i].open = 1.0;
+        snprintf(sec[i].date, 16, "2024.01.%02d", i + 2);
+        snprintf(sec[i].time_, 16, "00:00");
+        sec[i].open = 2.0;
+    }
+
+    data_intersect_raw(pri, 5, sec, 5, &out_pri, &out_sec, &out_n);
+
+    if (out_n != 4) {
+        printf("\n  FAIL: out_n=%d, expected 4\n", out_n);
+        utils_safe_free(out_pri);
+        utils_safe_free(out_sec);
+        return 0;
+    }
+
+    if (strcmp(out_pri[0].date, "2024.01.02") != 0) {
+        printf("\n  FAIL: first intersection date='%s', expected 2024.01.02\n", out_pri[0].date);
+        utils_safe_free(out_pri);
+        utils_safe_free(out_sec);
+        return 0;
+    }
+
+    printf("\n  PASS: partial overlap, 4 rows intersected\n");
+    utils_safe_free(out_pri);
+    utils_safe_free(out_sec);
+    return 1;
+}
+
+/* ==================== Test: data_intersect_raw empty ==================== */
+
+int test_intersect_raw_empty(void) {
+    DataRow pri[3], sec[3];
+    DataRow *out_pri, *out_sec;
+    int out_n;
+    int i;
+
+    printf("[TEST] data_intersect_raw: empty intersection...");
+    fflush(stdout);
+
+    for (i = 0; i < 3; i++) {
+        snprintf(pri[i].date, 16, "2024.01.%02d", i + 1);
+        snprintf(pri[i].time_, 16, "00:00");
+        snprintf(sec[i].date, 16, "2025.01.%02d", i + 1);
+        snprintf(sec[i].time_, 16, "00:00");
+    }
+
+    data_intersect_raw(pri, 3, sec, 3, &out_pri, &out_sec, &out_n);
+
+    if (out_n != 0) {
+        printf("\n  FAIL: out_n=%d, expected 0\n", out_n);
+        utils_safe_free(out_pri);
+        utils_safe_free(out_sec);
+        return 0;
+    }
+
+    printf("\n  PASS: empty intersection, 0 rows\n");
+    utils_safe_free(out_pri);
+    utils_safe_free(out_sec);
+    return 1;
+}
+
+/* ==================== Test: compute 13 base features only ==================== */
+
+int test_compute_raw_features_base_only(void) {
+    DataRow *raw;
+    int n = 50;
+    double **feat;
+    double *fmin, *fmax;
+    char **fnames;
+    int i;
+
+    printf("[TEST] data_compute_raw_features: 13 base features only...");
+    fflush(stdout);
+
+    raw = (DataRow *)utils_safe_malloc((size_t)n * sizeof(DataRow));
+    for (i = 0; i < n; i++) {
+        raw[i].open = 1.1000 + i * 0.001;
+        raw[i].high = raw[i].open + 0.0005;
+        raw[i].low = raw[i].open - 0.0005;
+        raw[i].close = raw[i].open + 0.0002;
+        raw[i].tickvol = 1000;
+        raw[i].vol = 0;
+        raw[i].spread = 1;
+        snprintf(raw[i].date, 16, "2024.01.%02d", (i % 28) + 1);
+        snprintf(raw[i].time_, 16, "%02d:00", i % 24);
+    }
+
+    fmin = (double *)calloc(13, sizeof(double));
+    fmax = (double *)calloc(13, sizeof(double));
+    fnames = (char **)calloc(13, sizeof(char *));
+    feat = data_compute_raw_features(raw, n, 13, fmin, fmax, fnames);
+
+    if (!feat) {
+        printf("\n  FAIL: returned NULL\n");
+        free(fmin); free(fmax); free(fnames); utils_safe_free(raw);
+        return 0;
+    }
+    if (strcmp(fnames[0], "candle_return") != 0) {
+        printf("\n  FAIL: fnames[0]='%s', expected 'candle_return'\n", fnames[0]);
+        data_free_raw_features(feat, n);
+        for (i = 0; i < 13; i++) free(fnames[i]);
+        free(fnames); free(fmin); free(fmax); utils_safe_free(raw);
+        return 0;
+    }
+    if (strcmp(fnames[12], "dow") != 0) {
+        printf("\n  FAIL: fnames[12]='%s', expected 'dow'\n", fnames[12]);
+        data_free_raw_features(feat, n);
+        for (i = 0; i < 13; i++) free(fnames[i]);
+        free(fnames); free(fmin); free(fmax); utils_safe_free(raw);
+        return 0;
+    }
+
+    printf("\n  PASS: 13 base features computed, names correct\n");
+    data_free_raw_features(feat, n);
+    for (i = 0; i < 13; i++) free(fnames[i]);
+    free(fnames); free(fmin); free(fmax); utils_safe_free(raw);
+    return 1;
+}
+
+/* ==================== Test: data_alloc_dataset_ext with NULL secondary ==================== */
+
+int test_alloc_dataset_ext_null_secondary(void) {
+    DataRow *raw;
+    int n = 100;
+    Dataset *ds;
+    int i;
+
+    printf("[TEST] data_alloc_dataset_ext: NULL secondary (backward compat)...");
+    fflush(stdout);
+
+    raw = (DataRow *)utils_safe_malloc((size_t)n * sizeof(DataRow));
+    for (i = 0; i < n; i++) {
+        raw[i].open = 1.1000 + i * 0.001;
+        raw[i].high = raw[i].open + 0.0005;
+        raw[i].low = raw[i].open - 0.0005;
+        raw[i].close = raw[i].open + 0.0002;
+        raw[i].tickvol = 1000;
+        raw[i].vol = 0;
+        raw[i].spread = 1;
+        snprintf(raw[i].date, 16, "2024.01.%02d", (i % 28) + 1);
+        snprintf(raw[i].time_, 16, "%02d:00", i % 24);
+    }
+
+    ds = data_alloc_dataset_ext(raw, n, 10, 5, 4, MODE_OHLC,
+                                NULL, 0, NULL, NULL, NULL);
+    if (!ds) {
+        printf("\n  FAIL: returned NULL\n");
+        utils_safe_free(raw);
+        return 0;
+    }
+    if (ds->num_features != NUM_RAW_FEATURES) {
+        printf("\n  FAIL: num_features=%d, expected %d\n", ds->num_features, NUM_RAW_FEATURES);
+        data_free_dataset(ds);
+        utils_safe_free(raw);
+        return 0;
+    }
+
+    printf("\n  PASS: NULL secondary gives %d features (backward compat)\n", ds->num_features);
+    data_free_dataset(ds);
+    utils_safe_free(raw);
+    return 1;
+}
+
+/* ==================== Test: data_alloc_dataset_ext with secondary ==================== */
+
+int test_alloc_dataset_ext_with_secondary(void) {
+    DataRow *raw;
+    int n = 100;
+    Dataset *ds;
+    double **sec_feat;
+    double *sec_min, *sec_max;
+    char **sec_names;
+    int i, j;
+    double sec_val = 0.7;
+
+    printf("[TEST] data_alloc_dataset_ext: with secondary (39 features)...");
+    fflush(stdout);
+
+    raw = (DataRow *)utils_safe_malloc((size_t)n * sizeof(DataRow));
+    for (i = 0; i < n; i++) {
+        raw[i].open = 1.1000 + i * 0.001;
+        raw[i].high = raw[i].open + 0.0005;
+        raw[i].low = raw[i].open - 0.0005;
+        raw[i].close = raw[i].open + 0.0002;
+        raw[i].tickvol = 1000;
+        raw[i].vol = 0;
+        raw[i].spread = 1;
+        snprintf(raw[i].date, 16, "2024.01.%02d", (i % 28) + 1);
+        snprintf(raw[i].time_, 16, "%02d:00", i % 24);
+    }
+
+    sec_feat = (double **)utils_safe_malloc((size_t)n * sizeof(double *));
+    for (i = 0; i < n; i++) {
+        sec_feat[i] = (double *)utils_safe_calloc((size_t)NUM_BASE_FEATURES, sizeof(double));
+        for (j = 0; j < NUM_BASE_FEATURES; j++)
+            sec_feat[i][j] = sec_val;
+    }
+    sec_min = (double *)utils_safe_calloc((size_t)NUM_BASE_FEATURES, sizeof(double));
+    sec_max = (double *)utils_safe_calloc((size_t)NUM_BASE_FEATURES, sizeof(double));
+    sec_names = (char **)utils_safe_calloc((size_t)NUM_BASE_FEATURES, sizeof(char *));
+    for (j = 0; j < NUM_BASE_FEATURES; j++) {
+        sec_min[j] = sec_val;
+        sec_max[j] = sec_val;
+        sec_names[j] = utils_strdup("sec_test");
+    }
+
+    ds = data_alloc_dataset_ext(raw, n, 10, 5, 4, MODE_OHLC,
+                                sec_feat, NUM_BASE_FEATURES, sec_min, sec_max, sec_names);
+    if (!ds) {
+        printf("\n  FAIL: returned NULL\n");
+        goto cleanup_sec;
+    }
+    if (ds->num_features != NUM_RAW_FEATURES + NUM_BASE_FEATURES) {
+        printf("\n  FAIL: num_features=%d, expected %d\n", ds->num_features, NUM_RAW_FEATURES + NUM_BASE_FEATURES);
+        data_free_dataset(ds);
+        goto cleanup_sec;
+    }
+    if (strncmp(ds->feat_names[26], "sec_", 4) != 0) {
+        printf("\n  FAIL: feat_names[26]='%s', expected sec_ prefix\n", ds->feat_names[26]);
+        data_free_dataset(ds);
+        goto cleanup_sec;
+    }
+    {
+        double val = ds->features[0][0 * ds->num_features + 26];
+        if (fabs(val - sec_val) > DBL_TOL) {
+            printf("\n  FAIL: secondary feature value=%.6f, expected %.6f\n", val, sec_val);
+            data_free_dataset(ds);
+            goto cleanup_sec;
+        }
+    }
+
+    printf("\n  PASS: 39 features, sec_ prefix, values correct\n");
+    data_free_dataset(ds);
+
+cleanup_sec:
+    for (i = 0; i < n; i++) free(sec_feat[i]);
+    free(sec_feat);
+    for (j = 0; j < NUM_BASE_FEATURES; j++) free(sec_names[j]);
+    free(sec_names); free(sec_min); free(sec_max);
+    utils_safe_free(raw);
+    return 1;
+}

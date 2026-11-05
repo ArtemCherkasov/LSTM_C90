@@ -77,6 +77,16 @@ int test_aggregate_h8(void);
 int test_aggregate_h1_identity(void);
 int test_aggregate_double_h2(void);
 
+/* Secondary-data (sdata) tests */
+int test_intersect_raw_full_overlap(void);
+int test_intersect_raw_partial(void);
+int test_intersect_raw_empty(void);
+int test_compute_raw_features_base_only(void);
+int test_alloc_dataset_ext_null_secondary(void);
+int test_alloc_dataset_ext_with_secondary(void);
+int test_forward_39_features(void);
+int test_backward_39_features(void);
+
 /* OHLC-specific */
 int test_training_loop_ohlc(void);
 int test_volume_clip_and_label_norm_ohlc(void);

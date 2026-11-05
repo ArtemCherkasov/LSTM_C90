@@ -367,9 +367,51 @@ void data_free_raw_features(double **raw_features, int num_raw) {
 
 /* ==================== Dataset Allocation (common) ==================== */
 
-Dataset *data_alloc_dataset(DataRow *raw, int num_raw, int seq_len,
-                             int prediction_horizon, int num_outputs, int mode) {
-    int num_features = NUM_RAW_FEATURES;
+/* ==================== Intersect raw arrays by date+time ==================== */
+
+int data_intersect_raw(DataRow *pri, int n_pri, DataRow *sec, int n_sec,
+                       DataRow **out_pri, DataRow **out_sec, int *out_n) {
+    int i, j, count, cap;
+    DataRow *rp, *rs;
+    char key_pri[32], key_sec[32];
+
+    *out_pri = NULL; *out_sec = NULL; *out_n = 0;
+    if (n_pri <= 0 || n_sec <= 0) return 0;
+
+    cap = (n_pri < n_sec) ? n_pri : n_sec;
+    rp = (DataRow *)utils_safe_malloc((size_t)cap * sizeof(DataRow));
+    rs = (DataRow *)utils_safe_malloc((size_t)cap * sizeof(DataRow));
+
+    i = 0; j = 0; count = 0;
+    while (i < n_pri && j < n_sec) {
+        int cmp;
+        snprintf(key_pri, sizeof(key_pri), "%s %s", pri[i].date, pri[i].time_);
+        snprintf(key_sec, sizeof(key_sec), "%s %s", sec[j].date, sec[j].time_);
+        cmp = strcmp(key_pri, key_sec);
+        if (cmp == 0) {
+            rp[count] = pri[i];
+            rs[count] = sec[j];
+            count++; i++; j++;
+        } else if (cmp < 0) {
+            i++;
+        } else {
+            j++;
+        }
+    }
+
+    *out_pri = rp; *out_sec = rs; *out_n = count;
+    return 0;
+}
+
+/* ==================== Dataset Allocation (extended) ==================== */
+
+Dataset *data_alloc_dataset_ext(DataRow *raw, int num_raw, int seq_len,
+                                int prediction_horizon, int num_outputs, int mode,
+                                double **sec_features, int num_sec_features,
+                                double *sec_feat_min, double *sec_feat_max,
+                                char **sec_feat_names) {
+    int num_primary = NUM_RAW_FEATURES;
+    int num_features = num_primary + (sec_features ? num_sec_features : 0);
     int num_samples;
     Dataset *ds;
     double **raw_features;
@@ -401,8 +443,16 @@ Dataset *data_alloc_dataset(DataRow *raw, int num_raw, int seq_len,
     ds->label_min = (double *)utils_safe_malloc((size_t)num_outputs * sizeof(double));
     ds->label_max = (double *)utils_safe_malloc((size_t)num_outputs * sizeof(double));
 
-    raw_features = data_compute_raw_features(raw, num_raw, num_features,
+    raw_features = data_compute_raw_features(raw, num_raw, num_primary,
                                               ds->feat_min, ds->feat_max, ds->feat_names);
+
+    if (sec_features) {
+        for (i = 0; i < num_sec_features; i++) {
+            ds->feat_min[num_primary + i] = sec_feat_min[i];
+            ds->feat_max[num_primary + i] = sec_feat_max[i];
+            ds->feat_names[num_primary + i] = utils_strdup(sec_feat_names[i]);
+        }
+    }
 
     for (i = 0; i < num_outputs; i++) {
         ds->label_min[i] = 1e30;
@@ -414,13 +464,26 @@ Dataset *data_alloc_dataset(DataRow *raw, int num_raw, int seq_len,
         ds->labels[i] = (double *)utils_safe_malloc((size_t)(seq_len * num_outputs) * sizeof(double));
         for (s = 0; s < seq_len; s++) {
             ti = i + s;
-            for (fi = 0; fi < num_features; fi++)
+            for (fi = 0; fi < num_primary; fi++)
                 ds->features[i][s * num_features + fi] = raw_features[ti][fi];
+            if (sec_features) {
+                for (fi = 0; fi < num_sec_features; fi++)
+                    ds->features[i][s * num_features + num_primary + fi] = sec_features[ti][fi];
+            }
         }
     }
 
     data_free_raw_features(raw_features, num_raw);
     return ds;
+}
+
+/* ==================== Dataset Allocation (common, wrapper) ==================== */
+
+Dataset *data_alloc_dataset(DataRow *raw, int num_raw, int seq_len,
+                             int prediction_horizon, int num_outputs, int mode) {
+    return data_alloc_dataset_ext(raw, num_raw, seq_len, prediction_horizon,
+                                  num_outputs, mode,
+                                  NULL, 0, NULL, NULL, NULL);
 }
 
 /* ==================== Free Dataset ==================== */

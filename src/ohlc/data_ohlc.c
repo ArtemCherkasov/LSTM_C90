@@ -2,16 +2,19 @@
 #include <stdlib.h>
 #include <math.h>
 
-Dataset *data_build_dataset_ohlc(DataRow *raw, int num_raw, int seq_len, int prediction_horizon) {
+Dataset *data_build_dataset_ohlc_ext(DataRow *raw, int num_raw, int seq_len, int prediction_horizon,
+                                     double **sec_features, int num_sec_features,
+                                     double *sec_feat_min, double *sec_feat_max,
+                                     char **sec_feat_names) {
     int num_outputs = prediction_horizon * 4;
     Dataset *ds;
     int i, s, k, j;
     int label_idx;
 
-    ds = data_alloc_dataset(raw, num_raw, seq_len, prediction_horizon, num_outputs, MODE_OHLC);
+    ds = data_alloc_dataset_ext(raw, num_raw, seq_len, prediction_horizon, num_outputs, MODE_OHLC,
+                                sec_features, num_sec_features, sec_feat_min, sec_feat_max, sec_feat_names);
     if (!ds) return NULL;
 
-    /* Fill OHLC return labels for each step */
     for (i = 0; i < ds->num_samples; i++) {
         for (s = 0; s < seq_len; s++) {
             int si = i + s;
@@ -24,7 +27,6 @@ Dataset *data_build_dataset_ohlc(DataRow *raw, int num_raw, int seq_len, int pre
                 ds->labels[i][s * num_outputs + k * 4 + 3] = (raw[label_idx].close - step_ref) / step_ref;
             }
         }
-        /* Track per-output min/max */
         for (s = 0; s < seq_len; s++) {
             for (j = 0; j < num_outputs; j++) {
                 double val = ds->labels[i][s * num_outputs + j];
@@ -34,6 +36,11 @@ Dataset *data_build_dataset_ohlc(DataRow *raw, int num_raw, int seq_len, int pre
         }
     }
     return ds;
+}
+
+Dataset *data_build_dataset_ohlc(DataRow *raw, int num_raw, int seq_len, int prediction_horizon) {
+    return data_build_dataset_ohlc_ext(raw, num_raw, seq_len, prediction_horizon,
+                                       NULL, 0, NULL, NULL, NULL);
 }
 
 void data_normalize_labels_ohlc(Dataset *ds) {

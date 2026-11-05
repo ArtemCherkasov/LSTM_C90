@@ -72,6 +72,17 @@ void data_free_raw_features(double **raw_features, int num_raw);
 Dataset *data_alloc_dataset(DataRow *raw, int num_raw, int seq_len,
                              int prediction_horizon, int num_outputs, int mode);
 
+/* Intersect two chronologically-sorted raw arrays by date+time key */
+int data_intersect_raw(DataRow *pri, int n_pri, DataRow *sec, int n_sec,
+                       DataRow **out_pri, DataRow **out_sec, int *out_n);
+
+/* Allocate Dataset with optional secondary features appended after primary */
+Dataset *data_alloc_dataset_ext(DataRow *raw, int num_raw, int seq_len,
+                                int prediction_horizon, int num_outputs, int mode,
+                                double **sec_features, int num_sec_features,
+                                double *sec_feat_min, double *sec_feat_max,
+                                char **sec_feat_names);
+
 /* Free dataset */
 void data_free_dataset(Dataset *ds);
 

@@ -142,6 +142,86 @@ static int find_row_by_datetime(DataRow *raw, int num_raw, const char *datetime_
     }
 }
 
+/* ==================== Secondary data helpers ==================== */
+
+static int prepare_secondary(const char *sdata_path, int h_period,
+                             DataRow **io_raw, int *io_num_raw,
+                             double ***out_sec_feat, int *out_sec_nfeat,
+                             double **out_sec_min, double **out_sec_max,
+                             char ***out_sec_names) {
+    DataRow *sec_raw = NULL, *new_pri = NULL, *new_sec = NULL;
+    int sec_count = 0, new_n = 0;
+    double **sec_feat;
+    double *sec_min, *sec_max;
+    char **sec_names;
+    int j;
+
+    *out_sec_feat = NULL; *out_sec_nfeat = 0;
+    *out_sec_min = NULL; *out_sec_max = NULL; *out_sec_names = NULL;
+
+    if (data_load_raw(sdata_path, &sec_raw, &sec_count) != 0) {
+        fprintf(stderr, "Failed to load secondary data: %s\n", sdata_path);
+        return -1;
+    }
+
+    if (h_period > 1) {
+        DataRow *agg; int agg_count;
+        data_aggregate_raw(sec_raw, sec_count, h_period, &agg, &agg_count);
+        utils_safe_free(sec_raw);
+        sec_raw = agg;
+        sec_count = agg_count;
+    }
+
+    data_intersect_raw(*io_raw, *io_num_raw, sec_raw, sec_count,
+                       &new_pri, &new_sec, &new_n);
+    utils_safe_free(sec_raw);
+
+    if (new_n == 0) {
+        fprintf(stderr, "Error: --sdata intersection with primary is empty\n");
+        utils_safe_free(new_pri);
+        utils_safe_free(new_sec);
+        return -1;
+    }
+
+    utils_safe_free(*io_raw);
+    *io_raw = new_pri;
+    *io_num_raw = new_n;
+
+    sec_min = (double *)utils_safe_calloc((size_t)NUM_BASE_FEATURES, sizeof(double));
+    sec_max = (double *)utils_safe_calloc((size_t)NUM_BASE_FEATURES, sizeof(double));
+    sec_names = (char **)utils_safe_calloc((size_t)NUM_BASE_FEATURES, sizeof(char *));
+    sec_feat = data_compute_raw_features(new_sec, new_n, NUM_BASE_FEATURES,
+                                          sec_min, sec_max, sec_names);
+    utils_safe_free(new_sec);
+
+    for (j = 0; j < NUM_BASE_FEATURES; j++) {
+        char tmp[40];
+        snprintf(tmp, sizeof(tmp), "sec_%s", sec_names[j]);
+        free(sec_names[j]);
+        sec_names[j] = utils_strdup(tmp);
+    }
+
+    *out_sec_feat = sec_feat;
+    *out_sec_nfeat = NUM_BASE_FEATURES;
+    *out_sec_min = sec_min;
+    *out_sec_max = sec_max;
+    *out_sec_names = sec_names;
+    return 0;
+}
+
+static void free_secondary(double **sec_feat, int num_raw,
+                           double *sec_min, double *sec_max,
+                           char **sec_names, int nfeat) {
+    int j;
+    if (sec_feat) data_free_raw_features(sec_feat, num_raw);
+    if (sec_names) {
+        for (j = 0; j < nfeat; j++) utils_safe_free(sec_names[j]);
+        utils_safe_free(sec_names);
+    }
+    utils_safe_free(sec_min);
+    utils_safe_free(sec_max);
+}
+
 int main(int argc, char *argv[]) {
     int num_lstm_cells, num_epochs, sequence_length, batch_size;
     double learning_rate, momentum;
@@ -199,6 +279,7 @@ int main(int argc, char *argv[]) {
     double weight_decay;
     int patience;
     int patience_counter;
+    const char *sdata_path;
 
     /* Parse CLI arguments */
     num_lstm_cells = DEFAULT_NUM_LSTM_CELLS;
@@ -217,7 +298,7 @@ int main(int argc, char *argv[]) {
     from_str[0] = 0;
     has_to = 0;
     to_str[0] = 0;
-    data_path = "../resources/EURUSD_H1_200906120000_202509251100.csv";
+    data_path = "../resources/EURUSD_H1_201001040000_202611022100.csv";
     model_path = NULL;
     predict_count = DEFAULT_OHLC_PREDICT_COUNT;
     model_path_overridden = 0;
@@ -225,6 +306,7 @@ int main(int argc, char *argv[]) {
     weight_decay = 1e-6;
     patience = 0;
     patience_counter = 0;
+    sdata_path = NULL;
     mode_str = "ohlc";
     mode = MODE_OHLC;
 
@@ -285,6 +367,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--patience") == 0 && i + 1 < argc) {
             patience = atoi(argv[i + 1]);
             i++;
+        } else if (strcmp(argv[i], "--sdata") == 0 && i + 1 < argc) {
+            sdata_path = argv[i + 1];
+            i++;
         } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode_str = argv[i + 1];
             if (strcmp(mode_str, "direction") == 0) {
@@ -331,14 +416,18 @@ int main(int argc, char *argv[]) {
     /* Build default model path if not overridden */
     if (!model_path_overridden) {
         snprintf(model_path_buf, sizeof(model_path_buf),
-                 "../resources/model_%s_%s_cells_%d_seq_%d_count_%d.txt",
-                 currency_pair, mode_str, num_lstm_cells, sequence_length, predict_count);
+                 "../resources/model_%s_%s_cells_%d_seq_%d_count_%d%s.txt",
+                 currency_pair, mode_str, num_lstm_cells, sequence_length, predict_count,
+                 sdata_path ? "_sdata" : "");
         model_path = model_path_buf;
     }
 
     /* ==================== REAL DATA MODE ==================== */
     if (is_realdata) {
         int from_row, to_row, k;
+
+        if (sdata_path)
+            fprintf(stderr, "Note: --sdata is ignored in realdata mode.\n");
 
         /* Load data */
         raw_data = NULL;
@@ -413,7 +502,7 @@ int main(int argc, char *argv[]) {
         }
 
         seq_len = sequence_length;
-        num_features = NUM_RAW_FEATURES;
+        num_features = NUM_RAW_FEATURES + (sdata_path ? NUM_BASE_FEATURES : 0);
         norm_count = 0;
 
         /* Load data */
@@ -430,6 +519,21 @@ int main(int argc, char *argv[]) {
             raw_data = agg;
             num_raw = agg_count;
         }
+
+        /* Prepare secondary data if --sdata specified */
+        {
+            double **sec_feat_p = NULL; int sec_nfeat_p = 0, sec_nrows_p = 0;
+            double *sec_min_p = NULL, *sec_max_p = NULL; char **sec_names_p = NULL;
+            if (sdata_path) {
+                if (prepare_secondary(sdata_path, h_period, &raw_data, &num_raw,
+                                      &sec_feat_p, &sec_nfeat_p,
+                                      &sec_min_p, &sec_max_p, &sec_names_p) != 0) {
+                    fprintf(stderr, "Failed to prepare secondary data.\n");
+                    utils_safe_free(raw_data);
+                    return 1;
+                }
+                sec_nrows_p = num_raw;
+            }
 
         /* Find row by datetime (nearest match if exact not found) */
         end_row = find_row_by_datetime(raw_data, num_raw, datetime_str);
@@ -586,8 +690,22 @@ int main(int argc, char *argv[]) {
             double **all_features;
             int fi2;
 
-            all_features = data_compute_raw_features(raw_data, end_row + 1, num_features,
+            all_features = data_compute_raw_features(raw_data, end_row + 1, NUM_RAW_FEATURES,
                                                       temp_feat_min, temp_feat_max, temp_feat_names);
+
+            if (sec_feat_p) {
+                double **combined = (double **)utils_safe_malloc((size_t)(end_row + 1) * sizeof(double *));
+                int rr2, cc2;
+                for (rr2 = 0; rr2 <= end_row; rr2++) {
+                    combined[rr2] = (double *)utils_safe_malloc((size_t)num_features * sizeof(double));
+                    for (cc2 = 0; cc2 < NUM_RAW_FEATURES; cc2++)
+                        combined[rr2][cc2] = all_features[rr2][cc2];
+                    for (cc2 = 0; cc2 < NUM_BASE_FEATURES; cc2++)
+                        combined[rr2][NUM_RAW_FEATURES + cc2] = sec_feat_p[rr2][cc2];
+                }
+                data_free_raw_features(all_features, end_row + 1);
+                all_features = combined;
+            }
 
             for (s = 0; s < seq_len; s++) {
                 int pi = end_row - seq_len + 1 + s;
@@ -637,7 +755,9 @@ int main(int argc, char *argv[]) {
         utils_safe_free(lbl_max_arr);
         utils_safe_free(raw_data);
         lstm_free(pred_network);
+        free_secondary(sec_feat_p, sec_nrows_p, sec_min_p, sec_max_p, sec_names_p, sec_nfeat_p);
         return 0;
+        }  /* end of sdata scope */
     }
 
     /* ==================== TRAIN MODE ==================== */
@@ -674,12 +794,39 @@ int main(int argc, char *argv[]) {
     }
     printf("  Loaded %d rows (H%d).\n\n", num_raw, h_period);
 
+    /* Prepare secondary data if --sdata specified */
+    {
+        double **sec_feat = NULL; int sec_nfeat = 0, sec_nrows = 0;
+        double *sec_min = NULL, *sec_max = NULL; char **sec_names = NULL;
+        if (sdata_path) {
+            if (prepare_secondary(sdata_path, h_period, &raw_data, &num_raw,
+                                  &sec_feat, &sec_nfeat,
+                                  &sec_min, &sec_max, &sec_names) != 0) {
+                fprintf(stderr, "Failed to prepare secondary data. Exiting.\n");
+                utils_safe_free(raw_data);
+                return 1;
+            }
+            sec_nrows = num_raw;
+            printf("  After --sdata intersection: %d rows, %d total features.\n\n",
+                   num_raw, NUM_RAW_FEATURES + sec_nfeat);
+        }
+
     /* Step 2: Build dataset */
     printf("[2/6] Building dataset (features, labels, normalization) ...\n");
     if (mode == MODE_OHLC) {
-        full_dataset = data_build_dataset_ohlc(raw_data, num_raw, sequence_length, predict_count);
+        full_dataset = sec_feat
+            ? data_build_dataset_ohlc_ext(raw_data, num_raw, sequence_length, predict_count,
+                                          sec_feat, sec_nfeat, sec_min, sec_max, sec_names)
+            : data_build_dataset_ohlc(raw_data, num_raw, sequence_length, predict_count);
     } else {
-        full_dataset = data_build_dataset_direction(raw_data, num_raw, sequence_length, predict_count);
+        full_dataset = sec_feat
+            ? data_build_dataset_direction_ext(raw_data, num_raw, sequence_length, predict_count,
+                                               sec_feat, sec_nfeat, sec_min, sec_max, sec_names)
+            : data_build_dataset_direction(raw_data, num_raw, sequence_length, predict_count);
+    }
+    if (sec_feat) {
+        free_secondary(sec_feat, sec_nrows, sec_min, sec_max, sec_names, sec_nfeat);
+        sec_feat = NULL;
     }
     if (!full_dataset) {
         fprintf(stderr, "Failed to build dataset. Exiting.\n");
@@ -900,4 +1047,5 @@ int main(int argc, char *argv[]) {
 
     printf("\nDone.\n");
     return 0;
+    }  /* end of sdata scope */
 }

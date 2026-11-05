@@ -88,6 +88,32 @@ int main(void) {
     total++; passed += test_aggregate_double_h2();
     printf("\n");
 
+    /* ===== Secondary-data (sdata) tests ===== */
+    printf("--- Secondary-data (sdata) tests ---\n\n");
+    total++; passed += test_intersect_raw_full_overlap();
+    printf("\n");
+
+    total++; passed += test_intersect_raw_partial();
+    printf("\n");
+
+    total++; passed += test_intersect_raw_empty();
+    printf("\n");
+
+    total++; passed += test_compute_raw_features_base_only();
+    printf("\n");
+
+    total++; passed += test_alloc_dataset_ext_null_secondary();
+    printf("\n");
+
+    total++; passed += test_alloc_dataset_ext_with_secondary();
+    printf("\n");
+
+    total++; passed += test_forward_39_features();
+    printf("\n");
+
+    total++; passed += test_backward_39_features();
+    printf("\n");
+
     /* ===== OHLC-specific tests ===== */
     printf("--- OHLC tests ---\n\n");
     total++; passed += test_training_loop_ohlc();
