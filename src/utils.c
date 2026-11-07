@@ -225,3 +225,29 @@ char *utils_strdup(const char *s) {
     memcpy(dup, s, len);
     return dup;
 }
+
+void utils_shift_datetime_back(const char *dt, int hours, char *out, int out_sz) {
+    int yr, mo, dy, hh, mm, ss;
+    int total_hours;
+    int days_in_month;
+
+    sscanf(dt, "%d.%d.%dT%d:%d:%d", &yr, &mo, &dy, &hh, &mm, &ss);
+
+    total_hours = hh - hours;
+    while (total_hours < 0) {
+        total_hours += 24;
+        dy--;
+        if (dy < 1) {
+            mo--;
+            if (mo < 1) { mo = 12; yr--; }
+            days_in_month = 31;
+            if (mo == 4 || mo == 6 || mo == 9 || mo == 11) days_in_month = 30;
+            else if (mo == 2) {
+                days_in_month = (yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0)) ? 29 : 28;
+            }
+            dy = days_in_month;
+        }
+    }
+
+    snprintf(out, out_sz, "%04d.%02d.%02dT%02d:%02d:%02d", yr, mo, dy, total_hours, mm, ss);
+}

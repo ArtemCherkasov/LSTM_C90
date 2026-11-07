@@ -98,4 +98,31 @@ int test_training_loop_direction(void);
 int test_sigmoid_gradient_check(void);
 int test_deterministic_direction(void);
 
+/* sdata fix tests */
+int test_mtf_features_finite(void);
+int test_mtf_features_bounded(void);
+int test_mtf_minmax_no_garbage(void);
+int test_sdata_intersection_chronological(void);
+int test_sdata_intersection_size(void);
+int test_sdata_39_features_finite(void);
+int test_sdata_iteration_count(void);
+
+/* timeframe alignment tests */
+int test_aggregate_h4_aligned(void);
+int test_aggregate_h2_aligned(void);
+int test_aggregate_h8_aligned(void);
+int test_aggregate_h4_after_gap(void);
+int test_aggregate_partial_group_kept(void);
+
+/* datetime shift tests */
+int test_datetime_shift_h1(void);
+int test_datetime_shift_h4(void);
+int test_datetime_shift_month_boundary(void);
+int test_datetime_shift_h1_identity(void);
+
+/* parameters file tests */
+int test_parameters_load(void);
+int test_parameters_blank_defaults(void);
+int test_parameters_cfg_loads(void);
+
 #endif /* TEST_UTILS_H */

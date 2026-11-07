@@ -7,9 +7,11 @@
 /* ==================== Constants ==================== */
 #define INITIAL_CAPACITY 1024
 #define CAPACITY_MULTIPLIER 2
-#define TRAIN_RATIO 0.8
 #define NORMALIZATION_EPSILON 1e-15
-#define VOLUME_RETURN_CLIP 10.0
+
+/* Configurable parameters (overridable via parameters file) */
+double g_train_ratio = 0.8;
+double g_volume_return_clip = 10.0;
 
 /* ==================== Day of Week (Zeller) ==================== */
 static int day_of_week(int year, int month, int day) {
@@ -89,10 +91,28 @@ int data_load_raw(const char *filepath, DataRow **out_rows, int *out_count) {
 
 /* ==================== Timeframe Aggregation ==================== */
 
+/* Compute group key for time-aligned aggregation.
+ * For h_period N, bars are grouped by (date, (hour / N) * N).
+ * This ensures H4 bars always start at 00:00, 04:00, 08:00, etc.,
+ * even after gaps (weekends, holidays). */
+static void compute_group_key(const char *date, const char *time_,
+                              int h_period, char *out_key) {
+    int hour;
+    int group_hour;
+    hour = atoi(time_);
+    group_hour = (hour / h_period) * h_period;
+    snprintf(out_key, 32, "%s %02d", date, group_hour);
+}
+
 void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
                         DataRow **out_raw, int *out_count) {
-    int num_agg, i, j;
+    int i, j;
     DataRow *agg;
+    int agg_count, agg_cap;
+    char cur_key[32], new_key[32];
+    double max_high, min_low;
+    double sum_tickvol, sum_vol;
+    int group_start; /* index of first bar in current group */
 
     if (h_period <= 1 || !raw || num_raw <= 0) {
         *out_raw = raw;
@@ -100,36 +120,70 @@ void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
         return;
     }
 
-    num_agg = num_raw / h_period;
-    agg = (DataRow *)utils_safe_malloc((size_t)num_agg * sizeof(DataRow));
+    agg_cap = num_raw; /* worst case: each bar is its own group */
+    agg = (DataRow *)utils_safe_malloc((size_t)agg_cap * sizeof(DataRow));
+    agg_count = 0;
 
-    for (i = 0; i < num_agg; i++) {
-        int base = i * h_period;
-        double max_high = raw[base].high;
-        double min_low = raw[base].low;
-        double sum_tickvol = 0.0;
-        double sum_vol = 0.0;
+    compute_group_key(raw[0].date, raw[0].time_, h_period, cur_key);
+    group_start = 0;
+    max_high = raw[0].high;
+    min_low = raw[0].low;
+    sum_tickvol = (double)raw[0].tickvol;
+    sum_vol = (double)raw[0].vol;
 
-        for (j = 0; j < h_period; j++) {
-            if (raw[base + j].high > max_high) max_high = raw[base + j].high;
-            if (raw[base + j].low < min_low) min_low = raw[base + j].low;
-            sum_tickvol += (double)raw[base + j].tickvol;
-            sum_vol += (double)raw[base + j].vol;
+    for (i = 1; i < num_raw; i++) {
+        compute_group_key(raw[i].date, raw[i].time_, h_period, new_key);
+
+        if (strcmp(new_key, cur_key) != 0) {
+            /* Finalize previous group */
+            int last = i - 1;
+            int g_hour = (atoi(raw[group_start].time_) / h_period) * h_period;
+            strcpy(agg[agg_count].date, raw[group_start].date);
+            snprintf(agg[agg_count].time_, 16, "%02d:00", g_hour);
+            agg[agg_count].open = raw[group_start].open;
+            agg[agg_count].high = max_high;
+            agg[agg_count].low = min_low;
+            agg[agg_count].close = raw[last].close;
+            agg[agg_count].tickvol = (int)sum_tickvol;
+            agg[agg_count].vol = (int)sum_vol;
+            agg[agg_count].spread = raw[group_start].spread;
+            agg_count++;
+
+            /* Start new group */
+            strcpy(cur_key, new_key);
+            group_start = i;
+            max_high = raw[i].high;
+            min_low = raw[i].low;
+            sum_tickvol = (double)raw[i].tickvol;
+            sum_vol = (double)raw[i].vol;
+        } else {
+            /* Same group: accumulate */
+            if (raw[i].high > max_high) max_high = raw[i].high;
+            if (raw[i].low < min_low) min_low = raw[i].low;
+            sum_tickvol += (double)raw[i].tickvol;
+            sum_vol += (double)raw[i].vol;
         }
-
-        strcpy(agg[i].date, raw[base].date);
-        strcpy(agg[i].time_, raw[base].time_);
-        agg[i].open = raw[base].open;
-        agg[i].high = max_high;
-        agg[i].low = min_low;
-        agg[i].close = raw[base + h_period - 1].close;
-        agg[i].tickvol = (int)sum_tickvol;
-        agg[i].vol = (int)sum_vol;
-        agg[i].spread = raw[base].spread;
     }
 
+    /* Finalize last group */
+    {
+        int last = num_raw - 1;
+        int g_hour = (atoi(raw[group_start].time_) / h_period) * h_period;
+        strcpy(agg[agg_count].date, raw[group_start].date);
+        snprintf(agg[agg_count].time_, 16, "%02d:00", g_hour);
+        agg[agg_count].open = raw[group_start].open;
+        agg[agg_count].high = max_high;
+        agg[agg_count].low = min_low;
+        agg[agg_count].close = raw[last].close;
+        agg[agg_count].tickvol = (int)sum_tickvol;
+        agg[agg_count].vol = (int)sum_vol;
+        agg[agg_count].spread = raw[group_start].spread;
+        agg_count++;
+    }
+
+    (void)j; /* silence unused warning */
     *out_raw = agg;
-    *out_count = num_agg;
+    *out_count = agg_count;
 }
 
 /* ==================== Feature Engineering (common) ==================== */
@@ -272,8 +326,8 @@ double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
         cret = (i > 0) ? (raw[i].close - raw[i - 1].close) / raw[i - 1].close : 0.0;
         vol_ret = (i > 0 && raw[i - 1].tickvol > 0) ?
             (raw[i].tickvol - raw[i - 1].tickvol) / (double)raw[i - 1].tickvol : 0.0;
-        if (vol_ret > VOLUME_RETURN_CLIP) vol_ret = VOLUME_RETURN_CLIP;
-        if (vol_ret < -VOLUME_RETURN_CLIP) vol_ret = -VOLUME_RETURN_CLIP;
+        if (vol_ret > g_volume_return_clip) vol_ret = g_volume_return_clip;
+        if (vol_ret < -g_volume_return_clip) vol_ret = -g_volume_return_clip;
         ma_diff = 0.0;
         if (i >= 20) {
             double ss = 0.0, sl = 0.0; int kk;
@@ -312,7 +366,10 @@ double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
             raw_features[i][11] = (double)hour / 23.0;
             raw_features[i][12] = (double)dow / 6.0;
         }
-        for (j = 0; j < num_features; j++) {
+        /* Only update min/max for base features (0-12); MTF features (13-25)
+         * are not yet computed at this point and raw_features[i][13..25]
+         * would be uninitialized garbage if read here. */
+        for (j = 0; j < NUM_BASE_FEATURES; j++) {
             if (raw_features[i][j] < feat_min[j]) feat_min[j] = raw_features[i][j];
             if (raw_features[i][j] > feat_max[j]) feat_max[j] = raw_features[i][j];
         }
@@ -524,7 +581,7 @@ DatasetSplit data_split_train_test(Dataset *ds, double train_ratio) {
     DatasetSplit split;
     int train_count, test_count, i, src;
     split.train = NULL; split.test = NULL;
-    train_count = (int)((double)ds->num_samples * TRAIN_RATIO);
+    train_count = (int)((double)ds->num_samples * g_train_ratio);
     if (train_count < 1) train_count = 1;
     if (train_count >= ds->num_samples) train_count = ds->num_samples - 1;
     test_count = ds->num_samples - train_count;

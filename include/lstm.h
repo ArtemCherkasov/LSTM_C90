@@ -20,6 +20,11 @@ typedef struct {
     int output_activation;  /* 0=linear, 1=sigmoid */
     double weight_decay;     /* L2 regularization strength */
 
+    /* Configurable hardcoded parameters (set from parameters file or defaults) */
+    double clip_min;         /* gradient clipping lower bound (default -5.0) */
+    double clip_max;         /* gradient clipping upper bound (default +5.0) */
+    double forget_gate_bias_init; /* forget gate bias init value (default 1.0) */
+
     /* Weight matrices for each gate: [num_cells x num_cells] (recurrent)
      *                      and [num_cells x num_features] (input) */
     Matrix *weight_forget_recurrent, *weight_forget_input;

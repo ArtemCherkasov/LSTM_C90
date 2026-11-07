@@ -11,6 +11,7 @@
 #include "include/ohlc/predict_ohlc.h"
 #include "include/direction/predict_direction.h"
 #include "include/types.h"
+#include "include/params.h"
 
 /* ==================== Global for signal handler ==================== */
 
@@ -141,6 +142,8 @@ static int find_row_by_datetime(DataRow *raw, int num_raw, const char *datetime_
             return lo;
     }
 }
+
+/* ==================== DateTime shift (in utils.c) ==================== */
 
 /* ==================== Secondary data helpers ==================== */
 
@@ -280,6 +283,9 @@ int main(int argc, char *argv[]) {
     int patience;
     int patience_counter;
     const char *sdata_path;
+    const char *params_path;
+    ParamsFile pf;
+    double param_clip_min, param_clip_max, param_forget_bias_init;
 
     /* Parse CLI arguments */
     num_lstm_cells = DEFAULT_NUM_LSTM_CELLS;
@@ -307,8 +313,60 @@ int main(int argc, char *argv[]) {
     patience = 0;
     patience_counter = 0;
     sdata_path = NULL;
+    params_path = NULL;
+    param_clip_min = CLIP_MIN;
+    param_clip_max = CLIP_MAX;
+    param_forget_bias_init = 1.0;
     mode_str = "ohlc";
     mode = MODE_OHLC;
+
+    /* First pass: find --parameters file and load it before other CLI args */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--parameters") == 0 && i + 1 < argc) {
+            params_path = argv[i + 1];
+            i++;
+        }
+    }
+
+    if (params_path) {
+        parse_parameters_file(params_path, &pf);
+        if (pf.has_cells) num_lstm_cells = pf.cells;
+        if (pf.has_epochs) num_epochs = pf.epochs;
+        if (pf.has_lr) learning_rate = pf.lr;
+        if (pf.has_seq) sequence_length = pf.seq;
+        if (pf.has_output) output_count = pf.output;
+        if (pf.has_datetime) { strcpy(datetime_str, pf.datetime); has_datetime = 1; }
+        if (pf.has_from) { strcpy(from_str, pf.from); has_from = 1; }
+        if (pf.has_to) { strcpy(to_str, pf.to); has_to = 1; }
+        if (pf.has_data) data_path = pf.data;
+        if (pf.has_model) { model_path = pf.model; model_path_overridden = 1; }
+        if (pf.has_h) h_period = pf.h;
+        if (pf.has_wd) weight_decay = pf.wd;
+        if (pf.has_patience) patience = pf.patience;
+        if (pf.has_sdata) sdata_path = pf.sdata;
+        if (pf.has_batch_size) batch_size = pf.batch_size;
+        if (pf.has_momentum) momentum = pf.momentum;
+        if (pf.has_seed) seed = pf.seed;
+        if (pf.has_clip_min) param_clip_min = pf.clip_min;
+        if (pf.has_clip_max) param_clip_max = pf.clip_max;
+        if (pf.has_train_ratio) g_train_ratio = pf.train_ratio;
+        if (pf.has_volume_return_clip) g_volume_return_clip = pf.volume_return_clip;
+        if (pf.has_forget_gate_bias_init) param_forget_bias_init = pf.forget_gate_bias_init;
+        if (pf.has_mode) {
+            mode_str = pf.mode;
+            if (strcmp(mode_str, "direction") == 0) {
+                mode = MODE_DIRECTION; is_prediction = 0;
+            } else if (strcmp(mode_str, "directionpredict") == 0) {
+                mode = MODE_DIRECTION; mode_str = "direction"; is_prediction = 1;
+            } else if (strcmp(mode_str, "ohlcpredict") == 0) {
+                mode = MODE_OHLC; mode_str = "ohlc"; is_prediction = 1;
+            } else if (strcmp(mode_str, "realdata") == 0) {
+                mode = MODE_OHLC; mode_str = "ohlc"; is_realdata = 1;
+            } else {
+                mode = MODE_OHLC; is_prediction = 0;
+            }
+        }
+    }
 
     /* Allow overriding data_path and model_path via CLI */
     for (i = 1; i < argc; i++) {
@@ -448,7 +506,9 @@ int main(int argc, char *argv[]) {
         to_row = num_raw - 1;
 
         if (has_from) {
-            from_row = find_row_by_datetime(raw_data, num_raw, from_str);
+            char shifted_from[32];
+            utils_shift_datetime_back(from_str, h_period, shifted_from, sizeof(shifted_from));
+            from_row = find_row_by_datetime(raw_data, num_raw, shifted_from);
             if (from_row < 0) {
                 fprintf(stderr, "Error: no data available\n");
                 utils_safe_free(raw_data);
@@ -456,7 +516,9 @@ int main(int argc, char *argv[]) {
             }
         }
         if (has_to) {
-            to_row = find_row_by_datetime(raw_data, num_raw, to_str);
+            char shifted_to[32];
+            utils_shift_datetime_back(to_str, h_period, shifted_to, sizeof(shifted_to));
+            to_row = find_row_by_datetime(raw_data, num_raw, shifted_to);
             if (to_row < 0) {
                 fprintf(stderr, "Error: no data available\n");
                 utils_safe_free(raw_data);
@@ -535,8 +597,14 @@ int main(int argc, char *argv[]) {
                 sec_nrows_p = num_raw;
             }
 
-        /* Find row by datetime (nearest match if exact not found) */
-        end_row = find_row_by_datetime(raw_data, num_raw, datetime_str);
+        /* Find row by datetime (nearest match if exact not found).
+         * Shift back by h_period hours so --datetime refers to the close
+         * of the last fully formed candle, not its open time. */
+        {
+            char shifted_dt[32];
+            utils_shift_datetime_back(datetime_str, h_period, shifted_dt, sizeof(shifted_dt));
+            end_row = find_row_by_datetime(raw_data, num_raw, shifted_dt);
+        }
         if (end_row < 0) {
             fprintf(stderr, "Error: no data available\n");
             utils_safe_free(raw_data);
@@ -615,6 +683,10 @@ int main(int argc, char *argv[]) {
 
         /* Load model */
         pred_network = lstm_init(num_lstm_cells, num_features, num_outputs, seed);
+        /* Apply configurable hardcoded parameters */
+        pred_network->clip_min = param_clip_min;
+        pred_network->clip_max = param_clip_max;
+        pred_network->forget_gate_bias_init = param_forget_bias_init;
         /* Direction uses sigmoid output + BCE loss */
         if (mode == MODE_DIRECTION)
             pred_network->output_activation = ACTIVATION_SIGMOID;
@@ -869,6 +941,10 @@ int main(int argc, char *argv[]) {
     /* Step 5: Initialize network */
     printf("[5/6] Initializing LSTM network ...\n");
     network = lstm_init(num_lstm_cells, full_dataset->num_features, num_outputs, seed);
+    /* Apply configurable hardcoded parameters */
+    network->clip_min = param_clip_min;
+    network->clip_max = param_clip_max;
+    network->forget_gate_bias_init = param_forget_bias_init;
     /* Direction uses sigmoid output + BCE loss for binary classification */
     if (mode == MODE_DIRECTION)
         network->output_activation = ACTIVATION_SIGMOID;

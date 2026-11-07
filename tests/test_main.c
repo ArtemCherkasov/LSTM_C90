@@ -139,6 +139,71 @@ int main(void) {
     total++; passed += test_deterministic_direction();
     printf("\n");
 
+    /* ===== sdata fix tests ===== */
+    printf("--- sdata fix tests ---\n\n");
+    total++; passed += test_mtf_features_finite();
+    printf("\n");
+
+    total++; passed += test_mtf_features_bounded();
+    printf("\n");
+
+    total++; passed += test_mtf_minmax_no_garbage();
+    printf("\n");
+
+    total++; passed += test_sdata_intersection_chronological();
+    printf("\n");
+
+    total++; passed += test_sdata_intersection_size();
+    printf("\n");
+
+    total++; passed += test_sdata_39_features_finite();
+    printf("\n");
+
+    total++; passed += test_sdata_iteration_count();
+    printf("\n");
+
+    /* ===== timeframe alignment tests ===== */
+    printf("--- timeframe alignment tests ---\n\n");
+    total++; passed += test_aggregate_h4_aligned();
+    printf("\n");
+
+    total++; passed += test_aggregate_h2_aligned();
+    printf("\n");
+
+    total++; passed += test_aggregate_h8_aligned();
+    printf("\n");
+
+    total++; passed += test_aggregate_h4_after_gap();
+    printf("\n");
+
+    total++; passed += test_aggregate_partial_group_kept();
+    printf("\n");
+
+    /* ===== datetime shift tests ===== */
+    printf("--- datetime shift tests ---\n\n");
+    total++; passed += test_datetime_shift_h1();
+    printf("\n");
+
+    total++; passed += test_datetime_shift_h4();
+    printf("\n");
+
+    total++; passed += test_datetime_shift_month_boundary();
+    printf("\n");
+
+    total++; passed += test_datetime_shift_h1_identity();
+    printf("\n");
+
+    /* ===== parameters file tests ===== */
+    printf("--- parameters file tests ---\n\n");
+    total++; passed += test_parameters_load();
+    printf("\n");
+
+    total++; passed += test_parameters_blank_defaults();
+    printf("\n");
+
+    total++; passed += test_parameters_cfg_loads();
+    printf("\n");
+
     printf("========================================\n");
     printf("Results: %d/%d tests passed\n", passed, total);
     printf("========================================\n");

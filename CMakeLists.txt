@@ -19,6 +19,7 @@ set(SOURCES
     src/data.c
     src/lstm.c
     src/model.c
+    src/params.c
     src/ohlc/data_ohlc.c
     src/ohlc/predict_ohlc.c
     src/direction/data_direction.c
@@ -41,6 +42,10 @@ set(TEST_SOURCES
     tests/test_gradient.c
     tests/test_features_26.c
     tests/test_data_io.c
+    tests/test_sdata_fixes.c
+    tests/test_timeframe_align.c
+    tests/test_datetime_shift.c
+    tests/test_parameters.c
     tests/ohlc/test_training_ohlc.c
     tests/ohlc/test_data_ohlc.c
     tests/ohlc/test_deterministic_ohlc.c
@@ -52,6 +57,7 @@ set(TEST_SOURCES
     src/data.c
     src/lstm.c
     src/model.c
+    src/params.c
     src/ohlc/data_ohlc.c
     src/ohlc/predict_ohlc.c
     src/direction/data_direction.c

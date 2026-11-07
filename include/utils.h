@@ -57,4 +57,8 @@ double utils_clip(double val, double min_val, double max_val);
 void utils_trim(char *str);
 char *utils_strdup(const char *s);
 
+/* Shift a datetime string (YYYY.MM.DDThh:mm:ss) back by 'hours' hours.
+ * Handles day/month/year underflow. Result written to out (size out_sz). */
+void utils_shift_datetime_back(const char *dt, int hours, char *out, int out_sz);
+
 #endif /* UTILS_H */

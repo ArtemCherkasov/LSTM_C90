@@ -20,6 +20,9 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigne
     net->num_outputs = num_outputs;
     net->output_activation = ACTIVATION_LINEAR;
     net->weight_decay = 1e-6;
+    net->clip_min = CLIP_MIN;
+    net->clip_max = CLIP_MAX;
+    net->forget_gate_bias_init = 1.0;
     fan_in = num_cells + num_features;
     scale = sqrt(2.0 / ((double)(fan_in + num_cells)));
 
@@ -47,9 +50,9 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigne
     GATE_ALLOC(candidate);
     #undef GATE_ALLOC
 
-    /* Forget gate bias = 1.0 to prevent gradient vanishing (Jozefowicz et al., 2015) */
+    /* Forget gate bias = forget_gate_bias_init to prevent gradient vanishing (Jozefowicz et al., 2015) */
     for (i = 0; i < num_cells; i++) {
-        net->bias_forget[i] = 1.0;
+        net->bias_forget[i] = net->forget_gate_bias_init;
     }
 
     net->weight_output_layer = matrix_alloc(num_outputs, num_cells);
@@ -62,10 +65,10 @@ LSTMNetwork *lstm_init(int num_cells, int num_features, int num_outputs, unsigne
     net->mbias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
     net->dbias_output_layer = (double *)utils_safe_calloc((size_t)num_outputs, sizeof(double));
 
-    /* Initialize forget gate bias to 1.0 (Jozefowicz et al., 2015) —
+    /* Initialize forget gate bias (Jozefowicz et al., 2015) —
      * helps prevent early forgetting in the first training steps */
     for (i = 0; i < num_cells; i++)
-        net->bias_forget[i] = 1.0;
+        net->bias_forget[i] = net->forget_gate_bias_init;
 
     return net;
 }
@@ -453,15 +456,15 @@ void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size) {
         for (ui = 0; ui < (net->dweight_##name##_recurrent)->rows * \
                             (net->dweight_##name##_recurrent)->cols; ui++) { \
             net->dweight_##name##_recurrent->data[ui] = utils_clip( \
-                net->dweight_##name##_recurrent->data[ui] * inv_batch, CLIP_MIN, CLIP_MAX); \
+                net->dweight_##name##_recurrent->data[ui] * inv_batch, net->clip_min, net->clip_max); \
         } \
         for (ui = 0; ui < (net->dweight_##name##_input)->rows * \
                             (net->dweight_##name##_input)->cols; ui++) { \
             net->dweight_##name##_input->data[ui] = utils_clip( \
-                net->dweight_##name##_input->data[ui] * inv_batch, CLIP_MIN, CLIP_MAX); \
+                net->dweight_##name##_input->data[ui] * inv_batch, net->clip_min, net->clip_max); \
         } \
         for (ui = 0; ui < (size_t)num_cells; ui++) { \
-            net->dbias_##name[ui] = utils_clip(net->dbias_##name[ui] * inv_batch, CLIP_MIN, CLIP_MAX); \
+            net->dbias_##name[ui] = utils_clip(net->dbias_##name[ui] * inv_batch, net->clip_min, net->clip_max); \
         } \
     } while (0)
 
@@ -473,11 +476,11 @@ void lstm_update(LSTMNetwork *net, double lr, double momentum, int batch_size) {
     for (ui = 0; ui < (net->dweight_output_layer)->rows * \
                         (net->dweight_output_layer)->cols; ui++) {
         net->dweight_output_layer->data[ui] = utils_clip(
-            net->dweight_output_layer->data[ui] * inv_batch, CLIP_MIN, CLIP_MAX);
+            net->dweight_output_layer->data[ui] * inv_batch, net->clip_min, net->clip_max);
     }
     for (ui = 0; ui < net->num_outputs; ui++) {
         net->dbias_output_layer[ui] = utils_clip(
-            net->dbias_output_layer[ui] * inv_batch, CLIP_MIN, CLIP_MAX);
+            net->dbias_output_layer[ui] * inv_batch, net->clip_min, net->clip_max);
     }
 
     #undef CLIP_GRAD

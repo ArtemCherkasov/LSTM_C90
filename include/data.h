@@ -12,6 +12,10 @@
 #define NUM_MTF_FEATURES  13      /* multi-timeframe features (H2 aggregation) */
 #define NUM_RAW_FEATURES  (NUM_BASE_FEATURES + NUM_MTF_FEATURES)  /* 26 */
 
+/* ==================== Configurable globals (set from parameters file) ==================== */
+extern double g_train_ratio;        /* default 0.8 */
+extern double g_volume_return_clip; /* default 10.0 */
+
 /* ==================== Raw Data Row ==================== */
 typedef struct {
     char date[16];
