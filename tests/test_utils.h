@@ -106,6 +106,9 @@ int test_sdata_intersection_chronological(void);
 int test_sdata_intersection_size(void);
 int test_sdata_39_features_finite(void);
 int test_sdata_iteration_count(void);
+int test_mtf_features_vary(void);
+int test_mtf_mapping_after_gap(void);
+int test_mtf_differs_from_base_h4(void);
 
 /* timeframe alignment tests */
 int test_aggregate_h4_aligned(void);

@@ -811,9 +811,11 @@ int main(int argc, char *argv[]) {
         /* Output only prediction results */
         if (mode == MODE_OHLC) {
             predict_ohlc(pred_outputs, num_outputs, seq_len,
-                         lbl_min_arr, lbl_max_arr, ref_close, predict_count);
+                         lbl_min_arr, lbl_max_arr, ref_close, predict_count,
+                         raw_data, end_row);
         } else {
-            predict_direction(pred_outputs, num_outputs, seq_len, predict_count);
+            predict_direction(pred_outputs, num_outputs, seq_len, predict_count,
+                             raw_data, end_row);
         }
 
         /* Cleanup */

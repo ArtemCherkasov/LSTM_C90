@@ -162,6 +162,15 @@ int main(void) {
     total++; passed += test_sdata_iteration_count();
     printf("\n");
 
+    total++; passed += test_mtf_features_vary();
+    printf("\n");
+
+    total++; passed += test_mtf_mapping_after_gap();
+    printf("\n");
+
+    total++; passed += test_mtf_differs_from_base_h4();
+    printf("\n");
+
     /* ===== timeframe alignment tests ===== */
     printf("--- timeframe alignment tests ---\n\n");
     total++; passed += test_aggregate_h4_aligned();

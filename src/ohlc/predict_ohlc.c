@@ -4,13 +4,15 @@
 
 void predict_ohlc(double *pred_outputs, int num_outputs, int seq_len,
                   double *lbl_min_arr, double *lbl_max_arr,
-                  double ref_close, int ohlc_predict_count) {
+                  double ref_close, int ohlc_predict_count,
+                  DataRow *raw_data, int end_row) {
     int last_base = (seq_len - 1) * num_outputs;
     int kk, o;
 
     for (kk = 0; kk < ohlc_predict_count; kk++) {
         double pred_open, pred_high, pred_low, pred_close;
         double label_max_abs;
+        int idx = end_row + 1 + kk;
 
         for (o = 0; o < 4; o++) {
             int out_idx = kk * 4 + o;
@@ -26,8 +28,9 @@ void predict_ohlc(double *pred_outputs, int num_outputs, int seq_len,
         pred_low   = ref_close * (1.0 + pred_outputs[last_base + kk * 4 + 2]);
         pred_close = ref_close * (1.0 + pred_outputs[last_base + kk * 4 + 3]);
 
-        printf("PRE [%03d] %.5f %.5f %.5f %.5f\n",
-               kk + 1, pred_open, pred_high, pred_low, pred_close);
+        printf("PRE [%03d] %.5f %.5f %.5f %.5f %sT%s\n",
+               kk + 1, pred_open, pred_high, pred_low, pred_close,
+               raw_data[idx].date, raw_data[idx].time_);
     }
 }
 
@@ -54,6 +57,7 @@ void demo_ohlc(LSTMNetwork *network, Dataset *ds, int ohlc_predict_count) {
         printf("  Sample %d predictions (last step OHLC x %d candles):\n", d, ohlc_predict_count);
         for (kk = 0; kk < ohlc_predict_count; kk++) {
             double pred_open, pred_high, pred_low, pred_close;
+            int idx = ref_row + 1 + kk;
             for (o = 0; o < 4; o++) {
                 int out_idx = kk * 4 + o;
                 double label_max_abs = fabs(ds->label_min[out_idx]);
@@ -66,8 +70,13 @@ void demo_ohlc(LSTMNetwork *network, Dataset *ds, int ohlc_predict_count) {
             pred_high  = ref_close * (1.0 + preds[last_base + kk * 4 + 1]);
             pred_low   = ref_close * (1.0 + preds[last_base + kk * 4 + 2]);
             pred_close = ref_close * (1.0 + preds[last_base + kk * 4 + 3]);
-            printf("    candle %d: O=%.5f H=%.5f L=%.5f C=%.5f\n",
-                   kk + 1, pred_open, pred_high, pred_low, pred_close);
+            if (idx >= 0 && idx < ds->num_raw)
+                printf("    candle %d: O=%.5f H=%.5f L=%.5f C=%.5f %sT%s\n",
+                       kk + 1, pred_open, pred_high, pred_low, pred_close,
+                       ds->raw_data[idx].date, ds->raw_data[idx].time_);
+            else
+                printf("    candle %d: O=%.5f H=%.5f L=%.5f C=%.5f\n",
+                       kk + 1, pred_open, pred_high, pred_low, pred_close);
         }
     }
     utils_safe_free(preds);

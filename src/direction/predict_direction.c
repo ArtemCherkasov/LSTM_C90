@@ -2,14 +2,18 @@
 #include <stdio.h>
 
 void predict_direction(double *pred_outputs, int num_outputs, int seq_len,
-                        int ohlc_predict_count) {
+                        int ohlc_predict_count,
+                        DataRow *raw_data, int end_row) {
     int last_base = (seq_len - 1) * num_outputs;
     int k;
 
     for (k = 0; k < ohlc_predict_count; k++) {
         double raw = pred_outputs[last_base + k];
         int direction = (raw > 0.5) ? 1 : -1;
-        printf("PRE [%03d] %d  (raw=%.6f)\n", k + 1, direction, raw);
+        int idx = end_row + 1 + k;
+        printf("PRE [%03d] %d  (raw=%.6f) %sT%s\n",
+               k + 1, direction, raw,
+               raw_data[idx].date, raw_data[idx].time_);
     }
 }
 

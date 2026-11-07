@@ -63,6 +63,11 @@ int data_load_raw(const char *filepath, DataRow **out_rows, int *out_count);
 void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
                         DataRow **out_raw, int *out_count);
 
+/* Aggregate every h_period consecutive bars (no time alignment). */
+/* Used for MTF features where bars are already evenly spaced. */
+void data_aggregate_raw_consecutive(DataRow *raw, int num_raw, int h_period,
+                                    DataRow **out_raw, int *out_count);
+
 /* Compute NUM_RAW_FEATURES features for all rows. */
 /* Also fills feat_min/feat_max and feat_names in the dataset. */
 double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,

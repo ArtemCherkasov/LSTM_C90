@@ -430,3 +430,230 @@ int test_sdata_iteration_count(void) {
            samples_with, samples_no, ratio * 100.0);
     return 1;
 }
+
+/* ==================== Test: MTF features actually vary (not constant/noise) ==================== */
+
+int test_mtf_features_vary(void) {
+    DataRow *raw = NULL;
+    int n = 0;
+    double **feat;
+    double *fmin, *fmax;
+    char **fnames;
+    int i, j;
+    int bad = 0;
+
+    printf("[TEST] MTF features vary across bars (not constant)...");
+    fflush(stdout);
+
+    if (data_load_raw("../resources/EURUSD_H1_201001040000_202611022100.csv",
+                      &raw, &n) != 0) {
+        printf("\n  FAIL: could not load CSV\n");
+        return 0;
+    }
+
+    fmin = (double *)calloc(NUM_RAW_FEATURES, sizeof(double));
+    fmax = (double *)calloc(NUM_RAW_FEATURES, sizeof(double));
+    fnames = (char **)calloc(NUM_RAW_FEATURES, sizeof(char *));
+    feat = data_compute_raw_features(raw, n, NUM_RAW_FEATURES, fmin, fmax, fnames);
+
+    /* Check that each MTF feature (13-25) has meaningful variance */
+    for (j = NUM_BASE_FEATURES; j < NUM_RAW_FEATURES; j++) {
+        double sum = 0.0, mean, var = 0.0;
+        int count = 0;
+        for (i = 100; i < n; i++) { /* skip warmup */
+            sum += feat[i][j];
+            count++;
+        }
+        mean = sum / (double)count;
+        for (i = 100; i < n; i++) {
+            double d = feat[i][j] - mean;
+            var += d * d;
+        }
+        var /= (double)count;
+        if (var < 1e-12) {
+            printf("\n  FAIL: MTF feature %d has near-zero variance (%.2e)\n", j, var);
+            bad = 1; break;
+        }
+    }
+
+    /* Also check that MTF features differ from their base counterparts
+     * (MTF should be same indicators on H2, not identical to H1) */
+    if (!bad) {
+        int diffs = 0;
+        for (i = 100; i < n && i < 1000; i++) {
+            for (j = 0; j < NUM_BASE_FEATURES; j++) {
+                if (fabs(feat[i][j] - feat[i][NUM_BASE_FEATURES + j]) > 1e-6) {
+                    diffs++;
+                }
+            }
+        }
+        if (diffs < 100) {
+            printf("\n  FAIL: MTF features nearly identical to base (%d diffs out of ~900)\n", diffs);
+            bad = 1;
+        }
+    }
+
+    data_free_raw_features(feat, n);
+    for (i = 0; i < NUM_RAW_FEATURES; i++) free(fnames[i]);
+    free(fnames); free(fmin); free(fmax); utils_safe_free(raw);
+
+    if (!bad) {
+        printf("\n  PASS: MTF features vary and differ from base\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* ==================== Test: MTF mapping correct after gap ==================== */
+
+int test_mtf_mapping_after_gap(void) {
+    /* Create synthetic data with a gap to test MTF time-aligned mapping.
+     * Bars: 00:00, 01:00, 02:00, 03:00, (gap), 06:00, 07:00
+     * H2 bars: 00:00 (from 00,01), 02:00 (from 02,03), 06:00 (from 06,07)
+     * Bar at 06:00 should map to H2 06:00, NOT H2 02:00 */
+    DataRow raw[7];
+    double **feat;
+    double *fmin, *fmax;
+    char **fnames;
+    int i;
+    int bad = 0;
+
+    printf("[TEST] MTF mapping correct after gap...");
+    fflush(stdout);
+
+    /* 4 bars: 00-03 */
+    for (i = 0; i < 4; i++) {
+        strcpy(raw[i].date, "2024.01.15");
+        snprintf(raw[i].time_, 16, "%02d:00", i);
+        raw[i].open = 1.10 + i * 0.001;
+        raw[i].high = raw[i].open + 0.0005;
+        raw[i].low = raw[i].open - 0.0005;
+        raw[i].close = raw[i].open + 0.0002;
+        raw[i].tickvol = 1000 + i;
+        raw[i].vol = 0;
+        raw[i].spread = 1;
+    }
+    /* Gap: skip 04:00, 05:00 */
+    /* 3 bars: 06, 07 + one more for dataset */
+    for (i = 4; i < 7; i++) {
+        strcpy(raw[i].date, "2024.01.15");
+        snprintf(raw[i].time_, 16, "%02d:00", i + 2); /* 06, 07, 08 */
+        raw[i].open = 1.10 + i * 0.001;
+        raw[i].high = raw[i].open + 0.0005;
+        raw[i].low = raw[i].open - 0.0005;
+        raw[i].close = raw[i].open + 0.0002;
+        raw[i].tickvol = 1000 + i;
+        raw[i].vol = 0;
+        raw[i].spread = 1;
+    }
+
+    fmin = (double *)calloc(NUM_RAW_FEATURES, sizeof(double));
+    fmax = (double *)calloc(NUM_RAW_FEATURES, sizeof(double));
+    fnames = (char **)calloc(NUM_RAW_FEATURES, sizeof(char *));
+    feat = data_compute_raw_features(raw, 7, NUM_RAW_FEATURES, fmin, fmax, fnames);
+
+    /* Bar at index 4 (06:00) should have MTF features from H2 06:00.
+     * With old mi=i/2 mapping: mi=4/2=2, but H2 only has 3 bars (00,02,06),
+     * so mi=2 → H2 06:00 (correct by luck here).
+     *
+     * Bar at index 4 with a bigger gap would fail with i/2.
+     * Let's verify the hour feature (MTF index 24) is correct.
+     * H2 bar at 06:00 → hour=6, mtf_hour = 6/23 ≈ 0.2609
+     * H2 bar at 02:00 → hour=2, mtf_hour = 2/23 ≈ 0.0870
+     * If mapped to wrong H2, the hour feature would be wrong. */
+    {
+        double mtf_hour_at_06 = feat[4][24]; /* MTF hour for bar at 06:00 */
+        double expected = 6.0 / 23.0;
+        if (fabs(mtf_hour_at_06 - expected) > 0.01) {
+            printf("\n  FAIL: MTF hour at 06:00 = %.6f, expected %.6f\n",
+                   mtf_hour_at_06, expected);
+            bad = 1;
+        }
+    }
+
+    data_free_raw_features(feat, 7);
+    for (i = 0; i < NUM_RAW_FEATURES; i++) free(fnames[i]);
+    free(fnames); free(fmin); free(fmax);
+
+    if (!bad) {
+        printf("\n  PASS: MTF mapping correct after gap\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* ==================== Test: MTF differs from base on H4 data ==================== */
+
+int test_mtf_differs_from_base_h4(void) {
+    /* The critical bug: when data is already H4 (hours 0,4,8,12...),
+     * time-aligned aggregation by 2 is a no-op, making MTF = base.
+     * With consecutive aggregation, MTF should differ from base. */
+    DataRow *raw = NULL;
+    int n_raw = 0;
+    DataRow *agg = NULL;
+    int n_agg = 0;
+    double **feat;
+    double *fmin, *fmax;
+    char **fnames;
+    int i, j;
+    int diffs = 0;
+    int bad = 0;
+
+    printf("[TEST] MTF differs from base on H4 data...");
+    fflush(stdout);
+
+    if (data_load_raw("../resources/EURUSD_H1_201001040000_202611022100.csv",
+                      &raw, &n_raw) != 0) {
+        printf("\n  FAIL: could not load CSV\n");
+        return 0;
+    }
+
+    /* Aggregate to H4 */
+    data_aggregate_raw(raw, n_raw, 4, &agg, &n_agg);
+    utils_safe_free(raw);
+
+    /* Compute 26 features on H4 data */
+    fmin = (double *)calloc(NUM_RAW_FEATURES, sizeof(double));
+    fmax = (double *)calloc(NUM_RAW_FEATURES, sizeof(double));
+    fnames = (char **)calloc(NUM_RAW_FEATURES, sizeof(char *));
+    feat = data_compute_raw_features(agg, n_agg, NUM_RAW_FEATURES, fmin, fmax, fnames);
+
+    /* Check MTF min/max differ from base min/max */
+    for (j = 0; j < NUM_BASE_FEATURES; j++) {
+        if (fabs(fmin[j] - fmin[NUM_BASE_FEATURES + j]) > 1e-6 ||
+            fabs(fmax[j] - fmax[NUM_BASE_FEATURES + j]) > 1e-6) {
+            diffs++;
+        }
+    }
+
+    if (diffs < 5) {
+        printf("\n  FAIL: MTF min/max nearly identical to base (%d diffs out of 13)\n", diffs);
+        bad = 1;
+    }
+
+    /* Also check feature values differ */
+    if (!bad) {
+        int val_diffs = 0;
+        for (i = 100; i < n_agg && i < 1000; i++) {
+            for (j = 0; j < NUM_BASE_FEATURES; j++) {
+                if (fabs(feat[i][j] - feat[i][NUM_BASE_FEATURES + j]) > 1e-6) {
+                    val_diffs++;
+                }
+            }
+        }
+        if (val_diffs < 100) {
+            printf("\n  FAIL: MTF values nearly identical to base (%d diffs out of ~11700)\n", val_diffs);
+            bad = 1;
+        }
+    }
+
+    data_free_raw_features(feat, n_agg);
+    for (i = 0; i < NUM_RAW_FEATURES; i++) free(fnames[i]);
+    free(fnames); free(fmin); free(fmax); utils_safe_free(agg);
+
+    if (!bad) {
+        printf("\n  PASS: MTF differs from base on H4 data (%d min/max diffs)\n", diffs);
+        return 1;
+    }
+    return 0;
+}

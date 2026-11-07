@@ -139,7 +139,7 @@ void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
             int last = i - 1;
             int g_hour = (atoi(raw[group_start].time_) / h_period) * h_period;
             strcpy(agg[agg_count].date, raw[group_start].date);
-            snprintf(agg[agg_count].time_, 16, "%02d:00", g_hour);
+            snprintf(agg[agg_count].time_, 16, "%02d:00:00", g_hour);
             agg[agg_count].open = raw[group_start].open;
             agg[agg_count].high = max_high;
             agg[agg_count].low = min_low;
@@ -184,6 +184,53 @@ void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
     (void)j; /* silence unused warning */
     *out_raw = agg;
     *out_count = agg_count;
+}
+
+/* ==================== Consecutive Aggregation (for MTF) ==================== */
+
+/* Group every h_period consecutive bars into one, regardless of time.
+ * Used for MTF features where bars are already evenly spaced. */
+void data_aggregate_raw_consecutive(DataRow *raw, int num_raw, int h_period,
+                                    DataRow **out_raw, int *out_count) {
+    int num_agg, i, j;
+    DataRow *agg;
+
+    if (h_period <= 1 || !raw || num_raw <= 0) {
+        *out_raw = raw;
+        *out_count = num_raw;
+        return;
+    }
+
+    num_agg = num_raw / h_period;
+    agg = (DataRow *)utils_safe_malloc((size_t)num_agg * sizeof(DataRow));
+
+    for (i = 0; i < num_agg; i++) {
+        int base = i * h_period;
+        double max_high = raw[base].high;
+        double min_low = raw[base].low;
+        double sum_tickvol = 0.0;
+        double sum_vol = 0.0;
+
+        for (j = 0; j < h_period; j++) {
+            if (raw[base + j].high > max_high) max_high = raw[base + j].high;
+            if (raw[base + j].low < min_low) min_low = raw[base + j].low;
+            sum_tickvol += (double)raw[base + j].tickvol;
+            sum_vol += (double)raw[base + j].vol;
+        }
+
+        strcpy(agg[i].date, raw[base].date);
+        strcpy(agg[i].time_, raw[base].time_);
+        agg[i].open = raw[base].open;
+        agg[i].high = max_high;
+        agg[i].low = min_low;
+        agg[i].close = raw[base + h_period - 1].close;
+        agg[i].tickvol = (int)sum_tickvol;
+        agg[i].vol = (int)sum_vol;
+        agg[i].spread = raw[base].spread;
+    }
+
+    *out_raw = agg;
+    *out_count = num_agg;
 }
 
 /* ==================== Feature Engineering (common) ==================== */
@@ -383,13 +430,18 @@ double **data_compute_raw_features(DataRow *raw, int num_raw, int num_features,
         char **mtf_names;
         int mtf_i;
 
-        data_aggregate_raw(raw, num_raw, 2, &mtf_raw, &mtf_count);
+        /* MTF uses consecutive grouping (every 2 bars), NOT time-aligned.
+         * The input bars are already evenly spaced (possibly via --h aggregation),
+         * so consecutive grouping correctly creates a 2x higher timeframe.
+         * Time-aligned grouping would be a no-op on already-aligned data (e.g. H4). */
+        data_aggregate_raw_consecutive(raw, num_raw, 2, &mtf_raw, &mtf_count);
         mtf_min = (double *)calloc(NUM_BASE_FEATURES, sizeof(double));
         mtf_max = (double *)calloc(NUM_BASE_FEATURES, sizeof(double));
         mtf_names = (char **)calloc(NUM_BASE_FEATURES, sizeof(char *));
         mtf_features = data_compute_raw_features(mtf_raw, mtf_count, NUM_BASE_FEATURES,
                                                    mtf_min, mtf_max, mtf_names);
 
+        /* With consecutive grouping, bar i maps to MTF bar i/2. */
         for (i = 0; i < num_raw; i++) {
             int mi = i / 2;
             if (mi >= mtf_count) mi = mtf_count - 1;
