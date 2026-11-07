@@ -11,7 +11,7 @@
 int model_save(const char *filepath, LSTMNetwork *net,
                double epochs_trained, double best_train_loss,
                double best_test_loss, double best_test_accuracy,
-               Dataset *norm_params);
+               Dataset *norm_params, int h_period);
 
 /* Load network from human-readable text file */
 int model_load(const char *filepath, LSTMNetwork *net);

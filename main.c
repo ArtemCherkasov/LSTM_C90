@@ -22,6 +22,7 @@ static double g_best_train_mse = 0.0;
 static double g_best_test_loss = 0.0;
 static double g_best_test_accuracy = 0.0;
 static Dataset *g_full_dataset = NULL;
+static int g_h_period = 1;
 
 static void signal_handler(int signum) {
     (void)signum;
@@ -29,7 +30,7 @@ static void signal_handler(int signum) {
     if (g_saved_network != NULL && g_model_path != NULL) {
         model_save(g_model_path, g_saved_network,
                    g_epochs_trained, g_best_train_mse,
-                   g_best_test_loss, g_best_test_accuracy, g_full_dataset);
+                   g_best_test_loss, g_best_test_accuracy, g_full_dataset, g_h_period);
         printf("Model saved to %s\n", g_model_path);
     }
     exit(1);
@@ -681,6 +682,28 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        /* Validate h_period against model file */
+        {
+            FILE *mf = fopen(model_path, "r");
+            int model_h = -1;
+            char vline4[512];
+            if (mf) {
+                while (fgets(vline4, sizeof(vline4), mf)) {
+                    utils_trim(vline4);
+                    if (strncmp(vline4, "# h_period:", strlen("# h_period:")) == 0) {
+                        model_h = atoi(vline4 + strlen("# h_period:"));
+                        break;
+                    }
+                }
+                fclose(mf);
+            }
+            if (model_h >= 0 && model_h != h_period) {
+                fprintf(stderr, "Error: --h %d does not match model's h_period %d\n", h_period, model_h);
+                utils_safe_free(raw_data);
+                return 1;
+            }
+        }
+
         /* Load model */
         pred_network = lstm_init(num_lstm_cells, num_features, num_outputs, seed);
         /* Apply configurable hardcoded parameters */
@@ -961,6 +984,7 @@ int main(int argc, char *argv[]) {
     g_saved_network = network;
     g_model_path = model_path;
     g_full_dataset = full_dataset;
+    g_h_period = h_period;
     g_best_train_mse = 1e30;
     g_best_test_loss = 1e30;
     g_best_test_accuracy = 0.0;
@@ -1067,7 +1091,7 @@ int main(int argc, char *argv[]) {
 
             /* Save model only when test loss improves */
             model_save(model_path, network, (double)(epoch + 1),
-                      train_loss, test_loss, test_acc, full_dataset);
+                      train_loss, test_loss, test_acc, full_dataset, h_period);
         } else {
             patience_counter++;
         }
@@ -1113,7 +1137,7 @@ int main(int argc, char *argv[]) {
     /* Save final model */
     printf("\nSaving final model to %s ...\n", model_path);
     model_save(model_path, network, (double)num_epochs,
-               best_train_loss, best_test_loss, best_test_accuracy, full_dataset);
+               best_train_loss, best_test_loss, best_test_accuracy, full_dataset, h_period);
 
     /* Cleanup */
     g_saved_network = NULL;

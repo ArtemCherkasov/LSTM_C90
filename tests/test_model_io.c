@@ -31,7 +31,7 @@ int test_save_load(void) {
     lstm_forward(net1, sequence, cell_states, 5, preds1);
     lstm_free_cell_states(cell_states, 5);
 
-    if (model_save("test_model.txt", net1, 10, 0.5, 0.6, 0.7, NULL) != 0) {
+    if (model_save("test_model.txt", net1, 10, 0.5, 0.6, 0.7, NULL, 1) != 0) {
         printf("  FAIL: could not save model\n");
         lstm_free(net1);
         return 0;

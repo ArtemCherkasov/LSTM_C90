@@ -26,7 +26,7 @@
 int model_save(const char *filepath, LSTMNetwork *net,
                double epochs_trained, double best_train_loss,
                double best_test_loss, double best_test_accuracy,
-               Dataset *norm_params) {
+               Dataset *norm_params, int h_period) {
     FILE *f;
     int n, f_, combined, num_out, i, j;
 
@@ -52,6 +52,7 @@ int model_save(const char *filepath, LSTMNetwork *net,
     fprintf(f, "# mode: %s\n", (norm_params && norm_params->mode == MODE_DIRECTION) ? "direction" : "ohlc");
     fprintf(f, "# output_activation: %d\n", net->output_activation);
     fprintf(f, "# seq_len: %d\n", norm_params ? norm_params->sequence_length : 0);
+    fprintf(f, "# h_period: %d\n", h_period);
     fprintf(f, "# epochs_trained: %.0f\n", epochs_trained);
     if (norm_params && norm_params->mode == MODE_DIRECTION) {
         fprintf(f, "# best_train_bce: %.6f\n", best_train_loss);
