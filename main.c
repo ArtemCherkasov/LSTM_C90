@@ -1076,11 +1076,11 @@ int main(int argc, char *argv[]) {
         test_loss = lstm_compute_loss(network, test);
         test_acc = lstm_compute_accuracy(network, test);
 
-        /* Save best model based on test loss */
-        if (test_loss < best_test_loss) {
-            best_test_loss = test_loss;
+        /* Save best model based on test loss OR test accuracy */
+        if (test_loss < best_test_loss || test_acc > best_test_accuracy) {
+            if (test_loss < best_test_loss) best_test_loss = test_loss;
+            if (test_acc > best_test_accuracy) best_test_accuracy = test_acc;
             best_train_loss = train_loss;
-            best_test_accuracy = test_acc;
             patience_counter = 0;
 
             /* Sync globals for signal handler */
