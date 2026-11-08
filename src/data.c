@@ -170,7 +170,7 @@ void data_aggregate_raw(DataRow *raw, int num_raw, int h_period,
         int last = num_raw - 1;
         int g_hour = (atoi(raw[group_start].time_) / h_period) * h_period;
         strcpy(agg[agg_count].date, raw[group_start].date);
-        snprintf(agg[agg_count].time_, 16, "%02d:00", g_hour);
+        snprintf(agg[agg_count].time_, 16, "%02d:00:00", g_hour);
         agg[agg_count].open = raw[group_start].open;
         agg[agg_count].high = max_high;
         agg[agg_count].low = min_low;
